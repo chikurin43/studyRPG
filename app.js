@@ -354,6 +354,7 @@ const questActiveList = document.getElementById("questActiveList");
 const questCompletedList = document.getElementById("questCompletedList");
 const materialList = document.getElementById("materialList");
 const equipmentList = document.getElementById("equipmentList");
+const inventoryEquippedSlots = document.getElementById("inventoryEquippedSlots");
 const gachaLog = document.getElementById("gachaLog");
 const stageList = document.getElementById("stageList");
 const studyHoursInput = document.getElementById("studyHours");
@@ -534,10 +535,27 @@ function renderEquipment() {
   }
   equipmentList.classList.remove("empty");
   state.equipment.forEach((e) => {
+    const slotKey = getSlotKey(e);
+    const isEquipped = state.equippedSlots[slotKey]?.uid === e.uid;
     const item = document.createElement("div");
     item.className = "quest-item";
-    item.innerHTML = `<div><h4>${e.name}</h4><div class="reward-list"><span class="pill">${e.kind}/${e.type}</span><span class="pill">${e.attr}/${e.color}</span><span class="pill">ランク ${e.rank}</span><span class="pill">主ステ ${e.stat}</span><span class="pill">消費MP ${e.mp}</span></div><p class="muted">${e.skill}</p></div>`;
+    item.innerHTML = `<div><h4>${e.name}</h4><div class="reward-list"><span class="pill">${e.kind}/${e.type}</span><span class="pill">${e.attr}/${e.color}</span><span class="pill">ランク ${e.rank}</span><span class="pill">主ステ ${e.stat}</span><span class="pill">消費MP ${e.mp}</span></div><p class="muted">${e.skill}</p></div><div class="quest-item-actions"><button data-uid="${e.uid}">${isEquipped ? "装備中" : "装備する"}</button><span class="pill">${slotKey}</span></div>`;
+    item.querySelector("button")?.addEventListener("click", () => {
+      equipItemToSlot(e);
+      updateUI();
+    });
     equipmentList.appendChild(item);
+  });
+}
+
+function renderInventoryEquippedSlots() {
+  inventoryEquippedSlots.innerHTML = "";
+  EQUIP_SLOT_KEYS.forEach((key) => {
+    const row = document.createElement("div");
+    const equip = state.equippedSlots[key];
+    row.className = "stat-row";
+    row.innerHTML = `<span>${key}</span><span>${equip ? `${equip.name} (Lv${equip.level || 1})` : "未装備"}</span>`;
+    inventoryEquippedSlots.appendChild(row);
   });
 }
 
@@ -719,11 +737,18 @@ function getSelectedEquipment() {
   return state.equipment.find((equip) => equip.uid === uid);
 }
 
+function getSlotKey(equip) {
+  return `${equip.kind}-${equip.type}`;
+}
+
+function equipItemToSlot(equip) {
+  state.equippedSlots[getSlotKey(equip)] = equip;
+}
+
 function equipToSlot() {
   const equip = getSelectedEquipment();
   if (!equip) return;
-  const key = `${equip.kind}-${equip.type}`;
-  state.equippedSlots[key] = equip;
+  equipItemToSlot(equip);
   updateUI();
 }
 
@@ -809,6 +834,7 @@ function updateUI() {
   updateStatus();
   renderQuestLists();
   renderMaterials();
+  renderInventoryEquippedSlots();
   renderEquipment();
   renderGachaLog();
   renderStages();
