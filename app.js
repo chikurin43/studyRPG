@@ -293,7 +293,34 @@ const EQUIPMENT_LIBRARY = [
   { id: 120, kind: "アクセサリ", type: "サブ", attr: "氷", color: "紫", rank: "C", name: "氷縛のミサンガ", stat: "INT", skill: "凍結付与率アップ：氷攻撃の凍結(与ダメージ-50%,3ターン)付与率+6%。凍結状態の敵に攻撃すると「氷結(行動不能)」状態に変化。" },
 ];
 
-const STORAGE_KEY = "studyRpgStateV2";
+const STORAGE_KEY = "studyRpgStateV3";
+
+const PLAYER_STATUS_BASE = {
+  HP: { base: 200, growth: 18 },
+  MP: { base: 50, growth: 0.5 },
+  STR: { base: 10, growth: 0.9 },
+  INT: { base: 10, growth: 0.9 },
+  DEF: { base: 10, growth: 0.9 },
+  SPD: { base: 10, growth: 0.9 },
+};
+
+const EQUIPMENT_STATUS_BASE = {
+  HP: { base: 100, growth: 9 },
+  MP: { base: 25, growth: 0.25 },
+  STR: { base: 5, growth: 0.45 },
+  INT: { base: 5, growth: 0.45 },
+  DEF: { base: 5, growth: 0.45 },
+  SPD: { base: 5, growth: 0.45 },
+};
+
+const EQUIP_SLOT_KEYS = [
+  "武器-メイン",
+  "武器-サブ",
+  "防具-メイン",
+  "防具-サブ",
+  "アクセサリ-メイン",
+  "アクセサリ-サブ",
+];
 
 const defaultState = {
   quests: [],
@@ -305,10 +332,18 @@ const defaultState = {
   clearedFloors: 0,
   playerPower: 1200,
   gachaLevel: 1,
+  player: {
+    level: 1,
+    breakthrough: 0,
+    points: 0,
+    allocated: { HP: 0, MP: 0, STR: 0, INT: 0, DEF: 0, SPD: 0 },
+  },
+  equippedSlots: {},
 };
 defaultState.materials["エネルギー"] = 1800;
 
 const state = loadState();
+normalizeState();
 
 const questForm = document.getElementById("questForm");
 const questName = document.getElementById("questName");
@@ -333,6 +368,17 @@ const rollGachaButton = document.getElementById("rollGacha");
 const rollAllGachaButton = document.getElementById("rollAllGacha");
 const tabs = document.querySelectorAll(".tab");
 const panels = document.querySelectorAll(".panel");
+const enhanceStats = document.getElementById("playerEnhanceStats");
+const enhancePointSummary = document.getElementById("enhancePointSummary");
+const levelUpPlayerButton = document.getElementById("levelUpPlayer");
+const breakthroughPlayerButton = document.getElementById("breakthroughPlayer");
+const pointControls = document.getElementById("pointControls");
+const playerEnhanceCost = document.getElementById("playerEnhanceCost");
+const enhanceEquipmentSelect = document.getElementById("enhanceEquipmentSelect");
+const equipToSlotButton = document.getElementById("equipToSlot");
+const levelUpEquipmentButton = document.getElementById("levelUpEquipment");
+const equipmentEnhanceCost = document.getElementById("equipmentEnhanceCost");
+const equipSlots = document.getElementById("equipSlots");
 
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -553,11 +599,208 @@ function renderStages() {
   });
 }
 
+function normalizeState() {
+  state.player = state.player || structuredClone(defaultState.player);
+  state.player.allocated = { ...structuredClone(defaultState.player.allocated), ...(state.player.allocated || {}) };
+  state.equippedSlots = { ...Object.fromEntries(EQUIP_SLOT_KEYS.map((k) => [k, null])), ...(state.equippedSlots || {}) };
+  state.equipment = (state.equipment || []).map((equip) => ({ level: 1, breakthrough: 0, ...equip }));
+}
+
+function calcValue(base, growth, level, breakthrough, pointLv = 0) {
+  return (base + (level - 1) * growth) * (1 + (level - 1) / 100) * (1.1 ** breakthrough) * (1 + pointLv / 10);
+}
+
+function getPlayerStats() {
+  const p = state.player;
+  const stats = {};
+  Object.entries(PLAYER_STATUS_BASE).forEach(([key, cfg]) => {
+    stats[key] = calcValue(cfg.base, cfg.growth, p.level, p.breakthrough, p.allocated[key] || 0);
+  });
+  return stats;
+}
+
+function getEquipmentMainStatValue(equip) {
+  const stat = EQUIPMENT_STATUS_BASE[equip.stat] || EQUIPMENT_STATUS_BASE.STR;
+  return calcValue(stat.base, stat.growth, equip.level || 1, equip.breakthrough || 0, 0);
+}
+
+function getPlayerPowerFromBuild() {
+  const playerStats = getPlayerStats();
+  const equipBonus = { HP: 0, MP: 0, STR: 0, INT: 0, DEF: 0, SPD: 0 };
+  Object.values(state.equippedSlots || {}).forEach((eq) => {
+    if (!eq?.stat) return;
+    equipBonus[eq.stat] += getEquipmentMainStatValue(eq);
+  });
+  const total = {
+    HP: playerStats.HP + equipBonus.HP,
+    MP: playerStats.MP + equipBonus.MP,
+    STR: playerStats.STR + equipBonus.STR,
+    INT: playerStats.INT + equipBonus.INT,
+    DEF: playerStats.DEF + equipBonus.DEF,
+    SPD: playerStats.SPD + equipBonus.SPD,
+  };
+  return Math.round(total.HP / 10 + total.MP * 2 + total.STR * 8 + total.INT * 8 + total.DEF * 6 + total.SPD * 6);
+}
+
+function getNextLevelCost() {
+  const lv = state.player.level;
+  return {
+    chip: Math.ceil((100 + (lv - 1) * 25) * (1 + (lv - 1) / 100)),
+    gold: Math.ceil((2000 + (lv - 1) * 500) * (1 + (lv - 1) / 100)),
+  };
+}
+
+function getBreakthroughCost() {
+  const b = state.player.breakthrough;
+  const stepLv = b * 10;
+  return {
+    chipA: Math.ceil((100 + stepLv * 25) * (1 + stepLv / 100)),
+    chipB: Math.ceil((100 + stepLv * 25) * (1 + stepLv / 100)),
+    gold: Math.ceil((20000 + stepLv * 5000) * (1 + stepLv / 100)),
+  };
+}
+
+function levelUpPlayer() {
+  if (state.player.level % 10 === 0) {
+    alert("10レベルごとに突破が必要です。");
+    return;
+  }
+  const cost = getNextLevelCost();
+  if (state.materials["経験チップ"] < cost.chip || state.materials["ゴールド"] < cost.gold) {
+    alert("素材が不足しています。");
+    return;
+  }
+  state.materials["経験チップ"] -= cost.chip;
+  state.materials["ゴールド"] -= cost.gold;
+  state.player.level += 1;
+  updateUI();
+}
+
+function breakthroughPlayer() {
+  if (state.player.level < (state.player.breakthrough + 1) * 10) {
+    alert("突破には規定レベルが必要です。");
+    return;
+  }
+  const cost = getBreakthroughCost();
+  if (state.materials["突破チップα"] < cost.chipA || state.materials["突破チップβ"] < cost.chipB || state.materials["ゴールド"] < cost.gold) {
+    alert("突破素材が不足しています。");
+    return;
+  }
+  state.materials["突破チップα"] -= cost.chipA;
+  state.materials["突破チップβ"] -= cost.chipB;
+  state.materials["ゴールド"] -= cost.gold;
+  state.player.breakthrough += 1;
+  state.player.points += state.player.breakthrough * 6;
+  updateUI();
+}
+
+function addPointToStat(stat) {
+  const current = state.player.allocated[stat] || 0;
+  const need = current + 1;
+  if (state.player.points < need) {
+    alert("ポイント不足です。");
+    return;
+  }
+  state.player.points -= need;
+  state.player.allocated[stat] = current + 1;
+  updateUI();
+}
+
+function getEquipmentLevelUpCost(equip) {
+  const lv = equip.level || 1;
+  return {
+    chip: Math.ceil((10 + (lv - 1) * 2.5) * (1 + (lv - 1) / 100)),
+    gold: Math.ceil((200 + (lv - 1) * 50) * (1 + (lv - 1) / 100)),
+  };
+}
+
+function getSelectedEquipment() {
+  const uid = enhanceEquipmentSelect.value;
+  return state.equipment.find((equip) => equip.uid === uid);
+}
+
+function equipToSlot() {
+  const equip = getSelectedEquipment();
+  if (!equip) return;
+  const key = `${equip.kind}-${equip.type}`;
+  state.equippedSlots[key] = equip;
+  updateUI();
+}
+
+function levelUpEquipment() {
+  const equip = getSelectedEquipment();
+  if (!equip) return;
+  const cost = getEquipmentLevelUpCost(equip);
+  if (state.materials["経験チップ"] < cost.chip || state.materials["ゴールド"] < cost.gold) {
+    alert("装備強化素材が不足しています。");
+    return;
+  }
+  state.materials["経験チップ"] -= cost.chip;
+  state.materials["ゴールド"] -= cost.gold;
+  equip.level = (equip.level || 1) + 1;
+  updateUI();
+}
+
+function renderEnhancePanel() {
+  const playerStats = getPlayerStats();
+  enhanceStats.innerHTML = "";
+  Object.entries(playerStats).forEach(([stat, value]) => {
+    const row = document.createElement("div");
+    row.className = "stat-row";
+    row.innerHTML = `<span>${stat}</span><strong>${formatNumber(value)}</strong>`;
+    enhanceStats.appendChild(row);
+  });
+
+  const levelCost = getNextLevelCost();
+  const breakCost = getBreakthroughCost();
+  enhancePointSummary.textContent = `Lv ${state.player.level} / 突破 ${state.player.breakthrough} / 残りポイント ${state.player.points}`;
+  playerEnhanceCost.textContent = `Lvアップ: 経験チップ ${formatNumber(levelCost.chip)} + ゴールド ${formatNumber(levelCost.gold)} | 突破: α ${formatNumber(breakCost.chipA)} / β ${formatNumber(breakCost.chipB)} / ゴールド ${formatNumber(breakCost.gold)}`;
+
+  pointControls.innerHTML = "";
+  ["HP", "MP", "STR", "INT", "DEF", "SPD"].forEach((stat) => {
+    const row = document.createElement("div");
+    row.className = "stat-row";
+    row.innerHTML = `<span>${stat} PtLv ${state.player.allocated[stat] || 0}</span><button data-stat="${stat}">+1</button>`;
+    row.querySelector("button").addEventListener("click", () => addPointToStat(stat));
+    pointControls.appendChild(row);
+  });
+
+  enhanceEquipmentSelect.innerHTML = "";
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = state.equipment.length ? "装備を選択" : "装備なし";
+  enhanceEquipmentSelect.appendChild(emptyOption);
+  state.equipment.slice(0, 100).forEach((equip) => {
+    const option = document.createElement("option");
+    option.value = equip.uid;
+    option.textContent = `${equip.name} [${equip.kind}/${equip.type}] Lv${equip.level || 1}`;
+    enhanceEquipmentSelect.appendChild(option);
+  });
+
+  const selected = getSelectedEquipment();
+  if (selected) {
+    const cost = getEquipmentLevelUpCost(selected);
+    equipmentEnhanceCost.textContent = `装備Lvアップ必要素材: 経験チップ ${formatNumber(cost.chip)} + ゴールド ${formatNumber(cost.gold)} / 主ステ ${selected.stat} +${formatNumber(getEquipmentMainStatValue(selected))}`;
+  } else {
+    equipmentEnhanceCost.textContent = "装備を選択すると必要素材が表示されます。";
+  }
+
+  equipSlots.innerHTML = "";
+  EQUIP_SLOT_KEYS.forEach((key) => {
+    const row = document.createElement("div");
+    row.className = "stat-row";
+    const equip = state.equippedSlots[key];
+    row.innerHTML = `<span>${key}</span><span>${equip ? `${equip.name} (Lv${equip.level || 1})` : "未装備"}</span>`;
+    equipSlots.appendChild(row);
+  });
+}
+
 function updateStatus() {
   questLevelEl.textContent = calculateQuestLevel();
   questMultiplierEl.textContent = calculateMultiplier().toFixed(2);
   studyHoursInput.value = state.studyHours;
   clearedFloorsInput.value = state.clearedFloors;
+  state.playerPower = getPlayerPowerFromBuild();
   playerPowerInput.value = state.playerPower;
   gachaLevelInput.value = state.gachaLevel;
 }
@@ -569,6 +812,7 @@ function updateUI() {
   renderEquipment();
   renderGachaLog();
   renderStages();
+  renderEnhancePanel();
   saveState();
 }
 
@@ -584,6 +828,11 @@ questForm.addEventListener("submit", addQuest);
 document.querySelector(".tabs").addEventListener("click", handleTabSwitch);
 rollGachaButton.addEventListener("click", () => rollGacha(1));
 rollAllGachaButton.addEventListener("click", () => rollGacha(Math.floor(state.materials["ガチャトークン"] / 100)));
+levelUpPlayerButton.addEventListener("click", levelUpPlayer);
+breakthroughPlayerButton.addEventListener("click", breakthroughPlayer);
+equipToSlotButton.addEventListener("click", equipToSlot);
+levelUpEquipmentButton.addEventListener("click", levelUpEquipment);
+enhanceEquipmentSelect.addEventListener("change", renderEnhancePanel);
 studyHoursInput.addEventListener("input", (e) => { state.studyHours = Number(e.target.value); updateUI(); });
 clearedFloorsInput.addEventListener("input", (e) => { state.clearedFloors = Number(e.target.value); updateUI(); });
 playerPowerInput.addEventListener("input", (e) => { state.playerPower = Number(e.target.value); updateUI(); });

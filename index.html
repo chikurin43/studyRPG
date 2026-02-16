@@ -124,25 +124,34 @@
         </div>
         <div class="card flex-card">
           <div>
-            <h3>プレイヤー強化</h3>
-            <ul class="bullet-list">
-              <li>レベルアップ素材: 経験チップ + ゴールド</li>
-              <li>10Lvごとに突破が必要</li>
-              <li>突破でポイント獲得 → ステータス配分</li>
-            </ul>
+            <h3>プレイヤー強化ステータス</h3>
+            <div id="playerEnhanceStats" class="list-grid"></div>
+            <p id="enhancePointSummary" class="muted"></p>
+            <div class="action-row">
+              <button id="levelUpPlayer">レベルアップ</button>
+              <button id="breakthroughPlayer" class="ghost">突破</button>
+            </div>
+            <p id="playerEnhanceCost" class="muted"></p>
           </div>
           <div>
-            <h3>装備強化</h3>
-            <ul class="bullet-list">
-              <li>装備Lvでメインステータス上昇</li>
-              <li>ランクに応じて上限・サブステータスが変化</li>
-              <li>同種装備の合成でランクアップ</li>
-            </ul>
+            <h3>ステータスポイント振り分け</h3>
+            <div id="pointControls" class="list-grid"></div>
+            <p class="muted">消費ポイント: 次レベル分のポイントを消費します。</p>
           </div>
         </div>
         <div class="card">
-          <h3>装備の変更/合成</h3>
-          <p class="muted">詳細な装備システムは後で実装予定。現在は所持品画面の装備一覧が反映されます。</p>
+          <h3>装備変更 / 装備強化</h3>
+          <label>
+            強化対象装備
+            <select id="enhanceEquipmentSelect"></select>
+          </label>
+          <div class="action-row">
+            <button id="equipToSlot">スロットに装備</button>
+            <button id="levelUpEquipment" class="ghost">装備Lvアップ</button>
+          </div>
+          <p id="equipmentEnhanceCost" class="muted"></p>
+          <h4>現在の装備スロット</h4>
+          <div id="equipSlots" class="list-grid"></div>
         </div>
       </section>
 
