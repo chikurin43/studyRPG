@@ -376,7 +376,6 @@ const breakthroughPlayerButton = document.getElementById("breakthroughPlayer");
 const pointControls = document.getElementById("pointControls");
 const playerEnhanceCost = document.getElementById("playerEnhanceCost");
 const enhanceEquipmentList = document.getElementById("enhanceEquipmentList");
-const equipSlots = document.getElementById("equipSlots");
 
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -729,6 +728,14 @@ function getEquipmentLevelUpCost(equip) {
   };
 }
 
+function getMaxTimesByCost(costMap) {
+  const times = Object.entries(costMap).map(([mat, need]) => {
+    if (need <= 0) return 9999;
+    return Math.floor((state.materials[mat] || 0) / need);
+  });
+  return Math.max(0, Math.min(...times));
+}
+
 function getSlotKey(equip) {
   return `${equip.kind}-${equip.type}`;
 }
@@ -763,8 +770,10 @@ function renderEnhancePanel() {
 
   const levelCost = getNextLevelCost();
   const breakCost = getBreakthroughCost();
+  const levelUpTimes = getMaxTimesByCost({ "経験チップ": levelCost.chip, "ゴールド": levelCost.gold });
+  const breakthroughTimes = getMaxTimesByCost({ "突破チップα": breakCost.chipA, "突破チップβ": breakCost.chipB, "ゴールド": breakCost.gold });
   enhancePointSummary.textContent = `Lv ${state.player.level} / 突破 ${state.player.breakthrough} / 残りポイント ${state.player.points}`;
-  playerEnhanceCost.textContent = `Lvアップ: 経験チップ ${formatNumber(levelCost.chip)} + ゴールド ${formatNumber(levelCost.gold)} | 突破: α ${formatNumber(breakCost.chipA)} / β ${formatNumber(breakCost.chipB)} / ゴールド ${formatNumber(breakCost.gold)}`;
+  playerEnhanceCost.textContent = `Lvアップ: 経験チップ ${formatNumber(levelCost.chip)}(所持${formatNumber(state.materials["経験チップ"] || 0)}) / ゴールド ${formatNumber(levelCost.gold)}(所持${formatNumber(state.materials["ゴールド"] || 0)}) → あと${levelUpTimes}回 | 突破: α ${formatNumber(breakCost.chipA)}(所持${formatNumber(state.materials["突破チップα"] || 0)}) / β ${formatNumber(breakCost.chipB)}(所持${formatNumber(state.materials["突破チップβ"] || 0)}) / ゴールド ${formatNumber(breakCost.gold)}(所持${formatNumber(state.materials["ゴールド"] || 0)}) → あと${breakthroughTimes}回`;
 
   pointControls.innerHTML = "";
   ["HP", "MP", "STR", "INT", "DEF", "SPD"].forEach((stat) => {
@@ -776,29 +785,23 @@ function renderEnhancePanel() {
   });
 
   enhanceEquipmentList.innerHTML = "";
-  if (!state.equipment.length) {
+  const equippedEntries = Object.entries(state.equippedSlots || {}).filter(([, equip]) => Boolean(equip));
+  if (!equippedEntries.length) {
     enhanceEquipmentList.classList.add("empty");
-    enhanceEquipmentList.textContent = "装備がありません。";
+    enhanceEquipmentList.textContent = "装備中の装備がありません。";
   } else {
     enhanceEquipmentList.classList.remove("empty");
-    state.equipment.forEach((equip) => {
+    equippedEntries.forEach(([slotKey, equip]) => {
       const cost = getEquipmentLevelUpCost(equip);
+      const maxTimes = getMaxTimesByCost({ "経験チップ": cost.chip, "ゴールド": cost.gold });
+      const canLevel = maxTimes > 0;
       const item = document.createElement("div");
       item.className = "quest-item";
-      item.innerHTML = `<div><h4>${equip.name}</h4><div class="reward-list"><span class="pill">${equip.kind}/${equip.type}</span><span class="pill">Lv ${equip.level || 1}</span><span class="pill">主ステ ${equip.stat}</span></div><p class="muted">必要: 経験チップ ${formatNumber(cost.chip)} / ゴールド ${formatNumber(cost.gold)}</p></div><div class="quest-item-actions"><button data-levelup="${equip.uid}">Lvアップ</button></div>`;
+      item.innerHTML = `<div><h4>${equip.name}</h4><div class="reward-list"><span class="pill">${slotKey}</span><span class="pill">Lv ${equip.level || 1}</span><span class="pill">主ステ ${equip.stat}</span></div><p class="muted">必要: 経験チップ ${formatNumber(cost.chip)}(所持${formatNumber(state.materials["経験チップ"] || 0)}) / ゴールド ${formatNumber(cost.gold)}(所持${formatNumber(state.materials["ゴールド"] || 0)}) → あと${maxTimes}回</p></div><div class="quest-item-actions"><button data-levelup="${equip.uid}" ${canLevel ? "" : "disabled"}>Lvアップ</button></div>`;
       item.querySelector("button")?.addEventListener("click", () => levelUpEquipmentByUid(equip.uid));
       enhanceEquipmentList.appendChild(item);
     });
   }
-
-  equipSlots.innerHTML = "";
-  EQUIP_SLOT_KEYS.forEach((key) => {
-    const row = document.createElement("div");
-    row.className = "stat-row";
-    const equip = state.equippedSlots[key];
-    row.innerHTML = `<span>${key}</span><span>${equip ? `${equip.name} (Lv${equip.level || 1})` : "未装備"}</span>`;
-    equipSlots.appendChild(row);
-  });
 }
 
 function updateStatus() {
