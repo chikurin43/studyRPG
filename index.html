@@ -178,31 +178,27 @@
       <section id="battle" class="panel">
         <div class="panel-header">
           <h2>戦闘</h2>
-          <p>コマンド制RPGの戦闘フローをプレビューします。</p>
+          <p>最大7体の敵と戦闘。攻撃対象は1ボタンで指定できます。</p>
         </div>
         <div class="card battle-card">
-          <div class="battle-status">
+          <div class="battle-status" id="battleStatus">
             <div>
               <h3>プレイヤー</h3>
-              <p>HP 1200 / MP 240</p>
-              <p>STR 180 / INT 160 / DEF 140 / SPD 150</p>
+              <p id="battlePlayerStats">HP 0 / MP 0</p>
+              <p id="battlePlayerSubStats">STR 0 / INT 0 / DEF 0 / SPD 0</p>
             </div>
             <div>
-              <h3>敵</h3>
-              <p>HP 1000 / MP 180</p>
-              <p>STR 140 / INT 110 / DEF 120 / SPD 130</p>
+              <h3>戦況</h3>
+              <p id="battleTurnInfo">Turn 1</p>
+              <p id="battleEnemyCount">敵 0体</p>
             </div>
           </div>
+          <div id="battleEnemies" class="list-grid"></div>
           <div class="battle-actions">
-            <button>通常攻撃</button>
-            <button>スキル1</button>
-            <button>スキル2</button>
-            <button>防御</button>
-            <button>アイテム</button>
+            <button id="battleStart">戦闘開始</button>
+            <button id="battleReset" class="ghost">再生成</button>
           </div>
-          <div class="battle-log">
-            <p>バトルログがここに表示されます。</p>
-          </div>
+          <div id="battleLog" class="battle-log"></div>
         </div>
       </section>
     </main>

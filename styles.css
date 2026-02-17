@@ -337,6 +337,34 @@ button.ghost {
   border-radius: 10px;
   padding: 12px;
   color: var(--muted);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.battle-enemy {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.battle-enemy.dead {
+  opacity: 0.55;
+}
+
+.insufficient {
+  color: #ff8a8a;
+  font-weight: 700;
+}
+
+.cost-line {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .app-footer {

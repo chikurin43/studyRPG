@@ -325,7 +325,7 @@ const EQUIP_SLOT_KEYS = [
 const defaultState = {
   quests: [],
   completedQuests: [],
-  materials: MATERIALS.reduce((acc, name) => ({ ...acc, [name]: name === "ガチャトークン" ? 500 : 2000 }), {}),
+  materials: MATERIALS.reduce((acc, name) => ({ ...acc, [name]: name === "ガチャトークン" ? 500 : 200000 }), {}),
   equipment: [],
   gachaLog: [],
   studyHours: 0,
@@ -339,6 +339,7 @@ const defaultState = {
     allocated: { HP: 0, MP: 0, STR: 0, INT: 0, DEF: 0, SPD: 0 },
   },
   equippedSlots: {},
+  battle: {},
 };
 defaultState.materials["エネルギー"] = 1800;
 
@@ -376,6 +377,14 @@ const breakthroughPlayerButton = document.getElementById("breakthroughPlayer");
 const pointControls = document.getElementById("pointControls");
 const playerEnhanceCost = document.getElementById("playerEnhanceCost");
 const enhanceEquipmentList = document.getElementById("enhanceEquipmentList");
+const battlePlayerStats = document.getElementById("battlePlayerStats");
+const battlePlayerSubStats = document.getElementById("battlePlayerSubStats");
+const battleTurnInfo = document.getElementById("battleTurnInfo");
+const battleEnemyCount = document.getElementById("battleEnemyCount");
+const battleEnemies = document.getElementById("battleEnemies");
+const battleLog = document.getElementById("battleLog");
+const battleStartButton = document.getElementById("battleStart");
+const battleResetButton = document.getElementById("battleReset");
 
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -618,6 +627,7 @@ function normalizeState() {
   state.player.allocated = { ...structuredClone(defaultState.player.allocated), ...(state.player.allocated || {}) };
   state.equippedSlots = { ...Object.fromEntries(EQUIP_SLOT_KEYS.map((k) => [k, null])), ...(state.equippedSlots || {}) };
   state.equipment = (state.equipment || []).map((equip) => ({ level: 1, breakthrough: 0, ...equip }));
+  state.battle = state.battle || createNewBattleState();
 }
 
 function calcValue(base, growth, level, breakthrough, pointLv = 0) {
@@ -770,10 +780,8 @@ function renderEnhancePanel() {
 
   const levelCost = getNextLevelCost();
   const breakCost = getBreakthroughCost();
-  const levelUpTimes = getMaxTimesByCost({ "経験チップ": levelCost.chip, "ゴールド": levelCost.gold });
-  const breakthroughTimes = getMaxTimesByCost({ "突破チップα": breakCost.chipA, "突破チップβ": breakCost.chipB, "ゴールド": breakCost.gold });
   enhancePointSummary.textContent = `Lv ${state.player.level} / 突破 ${state.player.breakthrough} / 残りポイント ${state.player.points}`;
-  playerEnhanceCost.textContent = `Lvアップ: 経験チップ ${formatNumber(levelCost.chip)}(所持${formatNumber(state.materials["経験チップ"] || 0)}) / ゴールド ${formatNumber(levelCost.gold)}(所持${formatNumber(state.materials["ゴールド"] || 0)}) → あと${levelUpTimes}回 | 突破: α ${formatNumber(breakCost.chipA)}(所持${formatNumber(state.materials["突破チップα"] || 0)}) / β ${formatNumber(breakCost.chipB)}(所持${formatNumber(state.materials["突破チップβ"] || 0)}) / ゴールド ${formatNumber(breakCost.gold)}(所持${formatNumber(state.materials["ゴールド"] || 0)}) → あと${breakthroughTimes}回`;
+  playerEnhanceCost.innerHTML = `${formatMaterialCost("Lvアップ", [{ name: "経験チップ", need: levelCost.chip }, { name: "ゴールド", need: levelCost.gold }])}<br>${formatMaterialCost("突破", [{ name: "突破チップα", need: breakCost.chipA }, { name: "突破チップβ", need: breakCost.chipB }, { name: "ゴールド", need: breakCost.gold }])}`;
 
   pointControls.innerHTML = "";
   ["HP", "MP", "STR", "INT", "DEF", "SPD"].forEach((stat) => {
@@ -793,15 +801,107 @@ function renderEnhancePanel() {
     enhanceEquipmentList.classList.remove("empty");
     equippedEntries.forEach(([slotKey, equip]) => {
       const cost = getEquipmentLevelUpCost(equip);
-      const maxTimes = getMaxTimesByCost({ "経験チップ": cost.chip, "ゴールド": cost.gold });
-      const canLevel = maxTimes > 0;
+      const canLevel = (state.materials["経験チップ"] || 0) >= cost.chip && (state.materials["ゴールド"] || 0) >= cost.gold;
       const item = document.createElement("div");
       item.className = "quest-item";
-      item.innerHTML = `<div><h4>${equip.name}</h4><div class="reward-list"><span class="pill">${slotKey}</span><span class="pill">Lv ${equip.level || 1}</span><span class="pill">主ステ ${equip.stat}</span></div><p class="muted">必要: 経験チップ ${formatNumber(cost.chip)}(所持${formatNumber(state.materials["経験チップ"] || 0)}) / ゴールド ${formatNumber(cost.gold)}(所持${formatNumber(state.materials["ゴールド"] || 0)}) → あと${maxTimes}回</p></div><div class="quest-item-actions"><button data-levelup="${equip.uid}" ${canLevel ? "" : "disabled"}>Lvアップ</button></div>`;
+      item.innerHTML = `<div><h4>${equip.name}</h4><div class="reward-list"><span class="pill">${slotKey}</span><span class="pill">Lv ${equip.level || 1}</span><span class="pill">主ステ ${equip.stat}</span></div><p class="muted">${formatMaterialCost("必要", [{ name: "経験チップ", need: cost.chip }, { name: "ゴールド", need: cost.gold }])}</p></div><div class="quest-item-actions"><button data-levelup="${equip.uid}" ${canLevel ? "" : "disabled"}>Lvアップ</button></div>`;
       item.querySelector("button")?.addEventListener("click", () => levelUpEquipmentByUid(equip.uid));
       enhanceEquipmentList.appendChild(item);
     });
   }
+}
+
+
+function formatMaterialCost(label, costs) {
+  const parts = costs.map(({ name, need }) => {
+    const own = state.materials[name] || 0;
+    const missing = Math.max(0, need - own);
+    const className = missing > 0 ? "insufficient" : "";
+    return `<span class="${className}">${name} ${formatNumber(need)}(所持${formatNumber(own)}${missing > 0 ? ` / 不足${formatNumber(missing)}` : ""})</span>`;
+  });
+  return `<span class="cost-line"><strong>${label}:</strong>${parts.join(" /")}</span>`;
+}
+
+function createNewBattleState() {
+  const enemies = Array.from({ length: Math.floor(Math.random() * 7) + 1 }, (_, i) => ({
+    id: `E${Date.now()}-${i}`,
+    name: `敵${i + 1}`,
+    maxHp: 500 + i * 120,
+    hp: 500 + i * 120,
+    str: 55 + i * 12,
+    def: 25 + i * 7,
+    spd: 20 + i * 4,
+    alive: true,
+  }));
+  const p = getPlayerStats();
+  return {
+    active: false,
+    turn: 1,
+    player: { hp: Math.ceil(p.HP), maxHp: Math.ceil(p.HP), mp: Math.ceil(p.MP), maxMp: Math.ceil(p.MP), str: Math.ceil(p.STR), int: Math.ceil(p.INT), def: Math.ceil(p.DEF), spd: Math.ceil(p.SPD) },
+    enemies,
+    log: ["戦闘準備完了"],
+  };
+}
+
+function beginBattle() {
+  state.battle = createNewBattleState();
+  state.battle.active = true;
+  state.battle.log.unshift("戦闘開始");
+  updateUI();
+}
+
+function enemyPhase() {
+  const aliveEnemies = state.battle.enemies.filter((e) => e.alive);
+  aliveEnemies.forEach((enemy) => {
+    if (state.battle.player.hp <= 0) return;
+    const dmg = Math.max(1, Math.round(enemy.str - state.battle.player.def * 0.35));
+    state.battle.player.hp = Math.max(0, state.battle.player.hp - dmg);
+    state.battle.log.unshift(`${enemy.name}の攻撃! プレイヤーに${dmg}ダメージ`);
+  });
+}
+
+function attackEnemy(enemyId) {
+  if (!state.battle.active) return;
+  const enemy = state.battle.enemies.find((e) => e.id === enemyId && e.alive);
+  if (!enemy || state.battle.player.hp <= 0) return;
+  const dmg = Math.max(1, Math.round(state.battle.player.str - enemy.def * 0.45 + Math.random() * 8));
+  enemy.hp = Math.max(0, enemy.hp - dmg);
+  state.battle.log.unshift(`プレイヤーが${enemy.name}に${dmg}ダメージ`);
+  if (enemy.hp <= 0) {
+    enemy.alive = false;
+    state.battle.log.unshift(`${enemy.name}を撃破`);
+  }
+  if (state.battle.enemies.every((e) => !e.alive)) {
+    state.battle.active = false;
+    state.battle.log.unshift("勝利！");
+    updateUI();
+    return;
+  }
+  enemyPhase();
+  state.battle.turn += 1;
+  if (state.battle.player.hp <= 0) {
+    state.battle.active = false;
+    state.battle.log.unshift("敗北...");
+  }
+  updateUI();
+}
+
+function renderBattlePanel() {
+  const b = state.battle || createNewBattleState();
+  battlePlayerStats.textContent = `HP ${formatNumber(b.player.hp || 0)} / ${formatNumber(b.player.maxHp || 0)}  MP ${formatNumber(b.player.mp || 0)} / ${formatNumber(b.player.maxMp || 0)}`;
+  battlePlayerSubStats.textContent = `STR ${formatNumber(b.player.str || 0)} / INT ${formatNumber(b.player.int || 0)} / DEF ${formatNumber(b.player.def || 0)} / SPD ${formatNumber(b.player.spd || 0)}`;
+  battleTurnInfo.textContent = `Turn ${b.turn || 1} ${b.active ? "(進行中)" : "(待機)"}`;
+  const alive = (b.enemies || []).filter((e) => e.alive).length;
+  battleEnemyCount.textContent = `敵 ${alive}/${(b.enemies || []).length}体`;
+  battleEnemies.innerHTML = "";
+  (b.enemies || []).forEach((enemy) => {
+    const row = document.createElement("div");
+    row.className = `battle-enemy${enemy.alive ? "" : " dead"}`;
+    row.innerHTML = `<div><strong>${enemy.name}</strong><p>HP ${formatNumber(enemy.hp)} / ${formatNumber(enemy.maxHp)} / DEF ${formatNumber(enemy.def)}</p></div><button ${(!b.active || !enemy.alive) ? "disabled" : ""}>この敵を攻撃</button>`;
+    row.querySelector("button").addEventListener("click", () => attackEnemy(enemy.id));
+    battleEnemies.appendChild(row);
+  });
+  battleLog.innerHTML = (b.log || []).slice(0, 12).map((l) => `<p>${l}</p>`).join("");
 }
 
 function updateStatus() {
@@ -823,6 +923,7 @@ function updateUI() {
   renderGachaLog();
   renderStages();
   renderEnhancePanel();
+  renderBattlePanel();
   saveState();
 }
 
@@ -840,6 +941,8 @@ rollGachaButton.addEventListener("click", () => rollGacha(1));
 rollAllGachaButton.addEventListener("click", () => rollGacha(Math.floor(state.materials["ガチャトークン"] / 100)));
 levelUpPlayerButton.addEventListener("click", levelUpPlayer);
 breakthroughPlayerButton.addEventListener("click", breakthroughPlayer);
+battleStartButton.addEventListener("click", beginBattle);
+battleResetButton.addEventListener("click", () => { state.battle = createNewBattleState(); updateUI(); });
 studyHoursInput.addEventListener("input", (e) => { state.studyHours = Number(e.target.value); updateUI(); });
 clearedFloorsInput.addEventListener("input", (e) => { state.clearedFloors = Number(e.target.value); updateUI(); });
 playerPowerInput.addEventListener("input", (e) => { state.playerPower = Number(e.target.value); updateUI(); });
