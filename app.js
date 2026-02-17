@@ -375,10 +375,7 @@ const levelUpPlayerButton = document.getElementById("levelUpPlayer");
 const breakthroughPlayerButton = document.getElementById("breakthroughPlayer");
 const pointControls = document.getElementById("pointControls");
 const playerEnhanceCost = document.getElementById("playerEnhanceCost");
-const enhanceEquipmentSelect = document.getElementById("enhanceEquipmentSelect");
-const equipToSlotButton = document.getElementById("equipToSlot");
-const levelUpEquipmentButton = document.getElementById("levelUpEquipment");
-const equipmentEnhanceCost = document.getElementById("equipmentEnhanceCost");
+const enhanceEquipmentList = document.getElementById("enhanceEquipmentList");
 const equipSlots = document.getElementById("equipSlots");
 
 function loadState() {
@@ -732,11 +729,6 @@ function getEquipmentLevelUpCost(equip) {
   };
 }
 
-function getSelectedEquipment() {
-  const uid = enhanceEquipmentSelect.value;
-  return state.equipment.find((equip) => equip.uid === uid);
-}
-
 function getSlotKey(equip) {
   return `${equip.kind}-${equip.type}`;
 }
@@ -745,15 +737,8 @@ function equipItemToSlot(equip) {
   state.equippedSlots[getSlotKey(equip)] = equip;
 }
 
-function equipToSlot() {
-  const equip = getSelectedEquipment();
-  if (!equip) return;
-  equipItemToSlot(equip);
-  updateUI();
-}
-
-function levelUpEquipment() {
-  const equip = getSelectedEquipment();
+function levelUpEquipmentByUid(uid) {
+  const equip = state.equipment.find((item) => item.uid === uid);
   if (!equip) return;
   const cost = getEquipmentLevelUpCost(equip);
   if (state.materials["経験チップ"] < cost.chip || state.materials["ゴールド"] < cost.gold) {
@@ -790,24 +775,20 @@ function renderEnhancePanel() {
     pointControls.appendChild(row);
   });
 
-  enhanceEquipmentSelect.innerHTML = "";
-  const emptyOption = document.createElement("option");
-  emptyOption.value = "";
-  emptyOption.textContent = state.equipment.length ? "装備を選択" : "装備なし";
-  enhanceEquipmentSelect.appendChild(emptyOption);
-  state.equipment.slice(0, 100).forEach((equip) => {
-    const option = document.createElement("option");
-    option.value = equip.uid;
-    option.textContent = `${equip.name} [${equip.kind}/${equip.type}] Lv${equip.level || 1}`;
-    enhanceEquipmentSelect.appendChild(option);
-  });
-
-  const selected = getSelectedEquipment();
-  if (selected) {
-    const cost = getEquipmentLevelUpCost(selected);
-    equipmentEnhanceCost.textContent = `装備Lvアップ必要素材: 経験チップ ${formatNumber(cost.chip)} + ゴールド ${formatNumber(cost.gold)} / 主ステ ${selected.stat} +${formatNumber(getEquipmentMainStatValue(selected))}`;
+  enhanceEquipmentList.innerHTML = "";
+  if (!state.equipment.length) {
+    enhanceEquipmentList.classList.add("empty");
+    enhanceEquipmentList.textContent = "装備がありません。";
   } else {
-    equipmentEnhanceCost.textContent = "装備を選択すると必要素材が表示されます。";
+    enhanceEquipmentList.classList.remove("empty");
+    state.equipment.forEach((equip) => {
+      const cost = getEquipmentLevelUpCost(equip);
+      const item = document.createElement("div");
+      item.className = "quest-item";
+      item.innerHTML = `<div><h4>${equip.name}</h4><div class="reward-list"><span class="pill">${equip.kind}/${equip.type}</span><span class="pill">Lv ${equip.level || 1}</span><span class="pill">主ステ ${equip.stat}</span></div><p class="muted">必要: 経験チップ ${formatNumber(cost.chip)} / ゴールド ${formatNumber(cost.gold)}</p></div><div class="quest-item-actions"><button data-levelup="${equip.uid}">Lvアップ</button></div>`;
+      item.querySelector("button")?.addEventListener("click", () => levelUpEquipmentByUid(equip.uid));
+      enhanceEquipmentList.appendChild(item);
+    });
   }
 
   equipSlots.innerHTML = "";
@@ -856,9 +837,6 @@ rollGachaButton.addEventListener("click", () => rollGacha(1));
 rollAllGachaButton.addEventListener("click", () => rollGacha(Math.floor(state.materials["ガチャトークン"] / 100)));
 levelUpPlayerButton.addEventListener("click", levelUpPlayer);
 breakthroughPlayerButton.addEventListener("click", breakthroughPlayer);
-equipToSlotButton.addEventListener("click", equipToSlot);
-levelUpEquipmentButton.addEventListener("click", levelUpEquipment);
-enhanceEquipmentSelect.addEventListener("change", renderEnhancePanel);
 studyHoursInput.addEventListener("input", (e) => { state.studyHours = Number(e.target.value); updateUI(); });
 clearedFloorsInput.addEventListener("input", (e) => { state.clearedFloors = Number(e.target.value); updateUI(); });
 playerPowerInput.addEventListener("input", (e) => { state.playerPower = Number(e.target.value); updateUI(); });

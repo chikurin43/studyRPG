@@ -144,16 +144,9 @@
           </div>
         </div>
         <div class="card">
-          <h3>装備変更 / 装備強化</h3>
-          <label>
-            強化対象装備
-            <select id="enhanceEquipmentSelect"></select>
-          </label>
-          <div class="action-row">
-            <button id="equipToSlot">スロットに装備</button>
-            <button id="levelUpEquipment" class="ghost">装備Lvアップ</button>
-          </div>
-          <p id="equipmentEnhanceCost" class="muted"></p>
+          <h3>装備一覧から直接強化</h3>
+          <p class="muted">各装備カードのボタンから1クリックで装備Lvアップできます。</p>
+          <div id="enhanceEquipmentList" class="list-grid empty">装備がありません。</div>
           <h4>現在の装備スロット</h4>
           <div id="equipSlots" class="list-grid"></div>
         </div>
