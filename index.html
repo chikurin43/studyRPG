@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StudyRPG - 勉強管理RPG</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="title-block">
+        <h1>StudyRPG</h1>
+        <p>勉強管理と育成が連動するRPGダッシュボード</p>
+      </div>
+      <div class="header-actions">
+        <div class="status-card">
+          <h2>今日の進捗</h2>
+          <label>
+            勉強時間(時間)
+            <input id="studyHours" type="number" min="0" step="0.5" value="0" />
+          </label>
+          <label>
+            クリア済みフロア
+            <input id="clearedFloors" type="number" min="0" step="1" value="0" />
+          </label>
+          <p class="status-note">
+            クエストLv: <span id="questLevel">1</span> / 強化倍率: <span id="questMultiplier">1.00</span>
+          </p>
+        </div>
+        <div class="status-card">
+          <h2>プレイヤー</h2>
+          <label>
+            戦闘力
+            <input id="playerPower" type="number" min="0" step="1" value="1200" />
+          </label>
+          <label>
+            ガチャLv
+            <input id="gachaLevel" type="number" min="1" max="50" step="1" value="1" />
+          </label>
+          <div class="action-row">
+            <button id="manualSave">手動セーブ</button>
+            <button id="resetData" class="ghost">初期化</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="画面切り替え">
+      <button class="tab active" data-tab="quest-register">クエスト登録</button>
+      <button class="tab" data-tab="quest-list">クエスト</button>
+      <button class="tab" data-tab="inventory">所持品</button>
+      <button class="tab" data-tab="enhance">強化</button>
+      <button class="tab" data-tab="gacha">ガチャ</button>
+      <button class="tab" data-tab="stage">ステージ選択</button>
+      <button class="tab" data-tab="battle">戦闘</button>
+    </nav>
+
+    <main class="main-content">
+      <section id="quest-register" class="panel active">
+        <div class="panel-header">
+          <h2>クエスト登録</h2>
+          <p>タスクをクエストとして登録し、達成時に報酬を獲得します。</p>
+        </div>
+        <form id="questForm" class="card form-grid">
+          <label>
+            タスク名
+            <input id="questName" type="text" placeholder="例: 英単語50個" required />
+          </label>
+          <label>
+            やりたい度
+            <select id="questDesire" required>
+              <option value="1">1: やりたい</option>
+              <option value="2">2: 普通</option>
+              <option value="3">3: 気が進まない</option>
+              <option value="4">4: 本当にやりたくない</option>
+            </select>
+          </label>
+          <label>
+            かかる時間(時間)
+            <input id="questHours" type="number" min="0.5" step="0.5" value="1" required />
+          </label>
+          <button type="submit">クエストを登録</button>
+        </form>
+        <div class="card">
+          <h3>登録済みクエスト</h3>
+          <div id="questPreview" class="list-grid empty">まだクエストがありません。</div>
+        </div>
+      </section>
+
+      <section id="quest-list" class="panel">
+        <div class="panel-header">
+          <h2>クエスト一覧</h2>
+          <p>達成マークで完了済みに移動し、報酬を所持品に追加します。</p>
+        </div>
+        <div class="card">
+          <h3>進行中</h3>
+          <div id="questActiveList" class="list-grid empty">進行中のクエストがありません。</div>
+        </div>
+        <div class="card">
+          <h3>完了済み</h3>
+          <div id="questCompletedList" class="list-grid empty">完了済みクエストがありません。</div>
+        </div>
+      </section>
+
+      <section id="inventory" class="panel">
+        <div class="panel-header">
+          <h2>所持品</h2>
+          <p>育成素材と装備を一覧表示します。</p>
+        </div>
+        <div class="card">
+          <h3>現在装備中</h3>
+          <div id="inventoryEquippedSlots" class="list-grid"></div>
+        </div>
+        <div class="card">
+          <h3>育成素材</h3>
+          <div id="materialList" class="inventory-grid"></div>
+        </div>
+        <div class="card">
+          <h3>装備一覧</h3>
+          <div id="equipmentList" class="list-grid empty">装備がありません。</div>
+        </div>
+      </section>
+
+      <section id="enhance" class="panel">
+        <div class="panel-header">
+          <h2>強化</h2>
+          <p>プレイヤーと装備の強化計画を管理します。</p>
+        </div>
+        <div class="card flex-card">
+          <div>
+            <h3>プレイヤー強化ステータス</h3>
+            <div id="playerEnhanceStats" class="list-grid"></div>
+            <p id="enhancePointSummary" class="muted"></p>
+            <div class="action-row">
+              <button id="levelUpPlayer">レベルアップ</button>
+              <button id="breakthroughPlayer" class="ghost">突破</button>
+            </div>
+            <p id="playerEnhanceCost" class="muted"></p>
+          </div>
+          <div>
+            <h3>ステータスポイント振り分け</h3>
+            <div id="pointControls" class="list-grid"></div>
+            <p class="muted">消費ポイント: 次レベル分のポイントを消費します。</p>
+          </div>
+        </div>
+        <div class="card">
+          <h3>装備一覧から直接強化</h3>
+          <p class="muted">各装備カードのボタンから1クリックで装備Lvアップできます。</p>
+          <div id="enhanceEquipmentList" class="list-grid empty">装備がありません。</div>
+          <h4>現在の装備スロット</h4>
+          <div id="equipSlots" class="list-grid"></div>
+        </div>
+      </section>
+
+      <section id="gacha" class="panel">
+        <div class="panel-header">
+          <h2>ガチャ</h2>
+          <p>ガチャトークンを100消費して装備を獲得します。</p>
+        </div>
+        <div class="card">
+          <div class="action-row">
+            <button id="rollGacha">ガチャを1回回す (100)</button>
+            <button id="rollAllGacha" class="ghost">全消費</button>
+          </div>
+          <p class="muted">ガチャLvが高いほど高ランク装備が排出されやすくなります。</p>
+          <div id="gachaLog" class="list-grid empty">まだガチャ結果がありません。</div>
+        </div>
+      </section>
+
+      <section id="stage" class="panel">
+        <div class="panel-header">
+          <h2>ステージ選択</h2>
+          <p>1ステージは30フロアで構成。挑戦ごとにエネルギー180消費。</p>
+        </div>
+        <div class="card">
+          <div id="stageList" class="stage-grid"></div>
+        </div>
+      </section>
+
+      <section id="battle" class="panel">
+        <div class="panel-header">
+          <h2>戦闘</h2>
+          <p>コマンド制RPGの戦闘フローをプレビューします。</p>
+        </div>
+        <div class="card battle-card">
+          <div class="battle-status">
+            <div>
+              <h3>プレイヤー</h3>
+              <p>HP 1200 / MP 240</p>
+              <p>STR 180 / INT 160 / DEF 140 / SPD 150</p>
+            </div>
+            <div>
+              <h3>敵</h3>
+              <p>HP 1000 / MP 180</p>
+              <p>STR 140 / INT 110 / DEF 120 / SPD 130</p>
+            </div>
+          </div>
+          <div class="battle-actions">
+            <button>通常攻撃</button>
+            <button>スキル1</button>
+            <button>スキル2</button>
+            <button>防御</button>
+            <button>アイテム</button>
+          </div>
+          <div class="battle-log">
+            <p>バトルログがここに表示されます。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <p>自動セーブ: 操作ごとに保存 / 手動セーブボタンで即時保存</p>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
