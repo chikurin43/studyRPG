@@ -1,0 +1,390 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f111a;
+  --panel: #1a1f2e;
+  --card: #232a3f;
+  --border: #2f3751;
+  --accent: #6c8cff;
+  --accent-light: #91a8ff;
+  --text: #f5f6ff;
+  --muted: #b3bedf;
+  --success: #4ade80;
+  --warning: #fbbf24;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, #171b2b 0%, #10121c 100%);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.title-block h1 {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.title-block p {
+  color: var(--muted);
+}
+
+.header-actions {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.status-card {
+  background: var(--panel);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  min-width: 240px;
+}
+
+.status-card h2 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+input,
+select {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+}
+
+button {
+  background: var(--accent);
+  color: #0b0d17;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover {
+  background: var(--accent-light);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 16px 32px 0;
+  flex-wrap: wrap;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 8px 16px;
+}
+
+.tab.active {
+  background: var(--accent);
+  color: #0b0d17;
+  border-color: transparent;
+}
+
+.main-content {
+  padding: 24px 32px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.panel {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.panel.active {
+  display: flex;
+}
+
+.panel-header h2 {
+  font-size: 20px;
+  margin-bottom: 6px;
+}
+
+.panel-header p {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+
+.list-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.list-grid.empty {
+  color: var(--muted);
+}
+
+.quest-item {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid transparent;
+}
+
+.quest-item-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.quest-item.completed {
+  border-color: var(--success);
+  opacity: 0.8;
+}
+
+.quest-item h4 {
+  margin-bottom: 6px;
+}
+
+.pill {
+  background: var(--border);
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reward-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.reward {
+  background: rgba(108, 140, 255, 0.15);
+  border: 1px solid rgba(108, 140, 255, 0.3);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.inventory-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.inventory-item {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+}
+
+.inventory-item strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.flex-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.bullet-list {
+  list-style: disc;
+  padding-left: 20px;
+  color: var(--muted);
+  display: grid;
+  gap: 6px;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-row:last-child {
+  border-bottom: none;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.stage-card {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+}
+
+.stage-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stage-card button {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.battle-card {
+  display: grid;
+  gap: 16px;
+}
+
+.battle-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.battle-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.battle-log {
+  background: #141824;
+  border-radius: 10px;
+  padding: 12px;
+  color: var(--muted);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.battle-enemy {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.battle-enemy.dead {
+  opacity: 0.55;
+}
+
+.insufficient {
+  color: #ff8a8a;
+  font-weight: 700;
+}
+
+.cost-line {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.app-footer {
+  padding: 16px 32px 32px;
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 720px) {
+  .app-header {
+    padding: 20px;
+  }
+
+  .tabs {
+    padding: 12px 20px 0;
+  }
+
+  .main-content {
+    padding: 20px;
+  }
+}
