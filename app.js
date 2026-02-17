@@ -325,7 +325,7 @@ const EQUIP_SLOT_KEYS = [
 const defaultState = {
   quests: [],
   completedQuests: [],
-  materials: MATERIALS.reduce((acc, name) => ({ ...acc, [name]: name === "ガチャトークン" ? 500 : 2000 }), {}),
+  materials: MATERIALS.reduce((acc, name) => ({ ...acc, [name]: name === "ガチャトークン" ? 500 : 200000 }), {}),
   equipment: [],
   gachaLog: [],
   studyHours: 0,
