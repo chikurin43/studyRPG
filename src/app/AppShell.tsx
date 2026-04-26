@@ -6,7 +6,7 @@ import { TasksView } from "@/features/tasks/TasksView";
 import { MonsterView } from "@/features/monster/MonsterView";
 import { RaidView } from "@/features/raid/RaidView";
 import { formatNumber } from "@/lib/formatters";
-import { getEnergyCap } from "@/lib/gameRules";
+import { getEnergyCap, getRaidReadyStats } from "@/lib/gameRules";
 import { useGameStore } from "@/store/gameStore";
 import type { ViewId } from "@/types/game";
 
@@ -26,10 +26,13 @@ export function AppShell() {
   const monster = useGameStore((state) => state.monster);
   const resources = useGameStore((state) => state.resources);
   const raid = useGameStore((state) => state.raid);
+  const equipmentInventory = useGameStore((state) => state.equipmentInventory);
+  const equippedSlots = useGameStore((state) => state.equippedSlots);
 
-  const openTasks = tasks.filter((task) => task.status !== "completed").length;
   const completedTasks = tasks.filter((task) => task.status === "completed").length;
   const energyCap = getEnergyCap(monster);
+  const raidProfile = getRaidReadyStats(monster, equipmentInventory, equippedSlots);
+  const equippedCount = Object.values(equippedSlots).filter(Boolean).length;
 
   return (
     <div className="min-h-screen px-4 py-5 text-stone-100 sm:px-6 lg:px-8">
@@ -57,10 +60,10 @@ export function AppShell() {
               {[
                 ["Monster Lv", formatNumber(monster.level)],
                 ["Energy", `${formatNumber(resources.energy)} / ${formatNumber(energyCap)}`],
-                ["Open Tasks", formatNumber(openTasks)],
-                ["Completed", formatNumber(completedTasks)],
+                ["Battle MP", formatNumber(raidProfile.mp)],
+                ["Equipped", `${formatNumber(equippedCount)} / 3`],
                 ["SP", formatNumber(resources.sp)],
-                ["Boss Stage", formatNumber(raid.boss.stage)],
+                ["Completed", formatNumber(completedTasks)],
               ].map(([label, value], index) => (
                 <div
                   key={label}

@@ -11,14 +11,25 @@ import {
   createTimerBonusSnapshot,
   expToNextLevel,
   getEnergyCap,
+  getEquipmentSkillRerollCost,
+  getLevelChoiceRerollCost,
+  getSlotLabel,
   getTaskDurationMs,
   grantMonsterExperience,
   grantRandomSkill,
   normalizePersistedGameState,
   rerollChoiceSet,
-  resolveRaidAttack,
+  rerollEquipmentActiveSkill,
+  rerollEquipmentPassiveSkill,
+  simulateRaidBattle,
 } from "@/lib/gameRules";
-import type { PersistedGameState, Task, TimerBonusSnapshot, ViewId } from "@/types/game";
+import type {
+  Equipment,
+  PersistedGameState,
+  Task,
+  TimerBonusSnapshot,
+  ViewId,
+} from "@/types/game";
 
 type StoreDependencies = {
   storage?: StateStorage;
@@ -46,6 +57,8 @@ type Actions = {
   completeTask: (taskId: string) => void;
   claimLevelChoice: (choiceId: string) => void;
   rerollLevelChoices: () => void;
+  equipItem: (equipmentId: string) => void;
+  rerollEquipmentSkill: (equipmentId: string, skillType: "active" | "passive") => void;
   attackRaidBoss: () => void;
   resetGame: () => void;
 };
@@ -53,7 +66,6 @@ type Actions = {
 export type GameStoreState = PersistedGameState & UIState & Actions;
 
 const STORAGE_KEY = "study-rpg-state";
-const REROLL_COST = 10;
 
 function createTaskId() {
   return `task-${crypto.randomUUID()}`;
@@ -70,6 +82,8 @@ function getPersistedSlice(state: GameStoreState): PersistedGameState {
     monster: state.monster,
     resources: state.resources,
     raid: state.raid,
+    equipmentInventory: state.equipmentInventory,
+    equippedSlots: state.equippedSlots,
   };
 }
 
@@ -81,13 +95,32 @@ function createDefaultStorage(storage?: StateStorage) {
   return createJSONStorage<PersistedGameState>(() => localStorage);
 }
 
+function maybeAutoEquip(
+  equipmentInventory: Equipment[],
+  equippedSlots: GameStoreState["equippedSlots"],
+  droppedEquipment: Equipment | null,
+) {
+  if (!droppedEquipment) {
+    return equippedSlots;
+  }
+
+  if (equippedSlots[droppedEquipment.slot]) {
+    return equippedSlots;
+  }
+
+  return {
+    ...equippedSlots,
+    [droppedEquipment.slot]: droppedEquipment.id,
+  };
+}
+
 export function createGameStore(dependencies: StoreDependencies = {}) {
   const random = dependencies.random ?? Math.random;
   const now = dependencies.now ?? (() => new Date());
 
   return createStore<GameStoreState>()(
     persist(
-      (set, get) => ({
+      (set) => ({
         ...createInitialGameState(),
         activeView: "tasks",
         lastActionMessage: "勉強タスクを登録して、最初の育成ループを始めましょう。",
@@ -176,7 +209,6 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
         completeTask: (taskId) =>
           set((state) => {
             const task = state.tasks.find((currentTask) => currentTask.id === taskId);
-
             if (!task || task.status === "completed") {
               return {
                 lastActionMessage: "このタスクはすでに処理済みです。",
@@ -242,38 +274,92 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 ...state.resources,
                 energy: clamp(state.resources.energy, 0, getEnergyCap(nextMonster)),
               },
-              lastActionMessage: `レベルアップ強化を適用しました。`,
+              lastActionMessage: "レベルアップ強化を適用しました。",
             };
           }),
 
         rerollLevelChoices: () =>
           set((state) => {
             const currentChoiceSet = state.monster.pendingLevelChoices[0];
+            const cost = getLevelChoiceRerollCost();
+
             if (!currentChoiceSet) {
               return {
                 lastActionMessage: "リロールできる候補がありません。",
               };
             }
 
-            if (state.resources.sp < REROLL_COST) {
+            if (state.resources.sp < cost) {
               return {
-                lastActionMessage: `SP が足りません。必要: ${REROLL_COST}`,
+                lastActionMessage: `SP が足りません。必要: ${cost}`,
               };
             }
 
-            const nextMonster = { ...state.monster };
-            nextMonster.pendingLevelChoices = [
-              rerollChoiceSet(nextMonster, currentChoiceSet, random),
-              ...state.monster.pendingLevelChoices.slice(1),
-            ];
-
             return {
-              monster: nextMonster,
+              monster: {
+                ...state.monster,
+                pendingLevelChoices: [
+                  rerollChoiceSet(state.monster, currentChoiceSet, random),
+                  ...state.monster.pendingLevelChoices.slice(1),
+                ],
+              },
               resources: {
                 ...state.resources,
-                sp: state.resources.sp - REROLL_COST,
+                sp: state.resources.sp - cost,
               },
-              lastActionMessage: "強化候補をリロールしました。",
+              lastActionMessage: `強化候補をリロールしました。SP -${cost}`,
+            };
+          }),
+
+        equipItem: (equipmentId) =>
+          set((state) => {
+            const equipment = state.equipmentInventory.find((item) => item.id === equipmentId);
+            if (!equipment) {
+              return {
+                lastActionMessage: "装備が見つかりません。",
+              };
+            }
+
+            return {
+              equippedSlots: {
+                ...state.equippedSlots,
+                [equipment.slot]: equipment.id,
+              },
+              lastActionMessage: `${getSlotLabel(equipment.slot)} に ${equipment.name} を装備しました。`,
+            };
+          }),
+
+        rerollEquipmentSkill: (equipmentId, skillType) =>
+          set((state) => {
+            const equipment = state.equipmentInventory.find((item) => item.id === equipmentId);
+            const cost = getEquipmentSkillRerollCost();
+
+            if (!equipment) {
+              return {
+                lastActionMessage: "装備が見つかりません。",
+              };
+            }
+
+            if (state.resources.sp < cost) {
+              return {
+                lastActionMessage: `SP が足りません。必要: ${cost}`,
+              };
+            }
+
+            const rerolled =
+              skillType === "active"
+                ? rerollEquipmentActiveSkill(equipment, random)
+                : rerollEquipmentPassiveSkill(equipment, random);
+
+            return {
+              equipmentInventory: state.equipmentInventory.map((item) =>
+                item.id === equipmentId ? rerolled : item,
+              ),
+              resources: {
+                ...state.resources,
+                sp: state.resources.sp - cost,
+              },
+              lastActionMessage: `${equipment.name} の${skillType === "active" ? "アクティブ" : "パッシブ"}スキルをリロールしました。`,
             };
           }),
 
@@ -287,35 +373,50 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               };
             }
 
-            const { boss, result } = resolveRaidAttack(
+            const battle = simulateRaidBattle(
               state.monster,
               state.raid.boss,
+              state.equipmentInventory,
+              state.equippedSlots,
               random,
               actionTime,
             );
+
             let nextMonster = state.monster;
             let nextSp = state.resources.sp;
             let nextEnergy = state.resources.energy - state.raid.boss.energyCost;
-            let rewardSummary: string | null = null;
-            const nextLog = [...state.raid.log];
+            const nextInventory = battle.summary.equipmentDrop
+              ? [battle.summary.equipmentDrop, ...state.equipmentInventory]
+              : state.equipmentInventory;
+            const nextEquippedSlots = maybeAutoEquip(
+              nextInventory,
+              state.equippedSlots,
+              battle.summary.equipmentDrop,
+            );
+            const nextLog = [
+              `Stage ${battle.previousStage}: ${battle.summary.outcome} / ${battle.summary.damageToBoss} total damage`,
+              ...battle.summary.log.map((entry) => entry.text),
+            ];
+            let rewardSummary =
+              battle.summary.equipmentDrop !== null
+                ? `装備ドロップ: ${battle.summary.equipmentDrop.name}`
+                : null;
 
-            nextLog.unshift(`Stage ${result.previousStage}: ${result.damage} ダメージを与えた。`);
-
-            if (result.defeated) {
-              const bossExp = 150 * result.previousStage;
-              const bossSp = 15 * result.previousStage;
+            if (battle.defeated) {
+              const bossExp = 150 * battle.previousStage;
+              const bossSp = 15 * battle.previousStage;
               const bonusEnergy = 20;
-              const raidSkillRoll = random();
               let grantedSkillName: string | null = null;
 
-              if (raidSkillRoll < 0.6) {
+              nextMonster = grantMonsterExperience(nextMonster, bossExp, random).monster;
+              nextSp += bossSp;
+
+              if (random() < 0.6) {
                 const skillGrant = grantRandomSkill(nextMonster, random);
                 nextMonster = skillGrant.monster;
                 grantedSkillName = skillGrant.skill?.name ?? null;
               }
 
-              nextMonster = grantMonsterExperience(nextMonster, bossExp, random).monster;
-              nextSp += bossSp;
               const nextEnergyAfterReward = clamp(
                 nextEnergy + bonusEnergy,
                 0,
@@ -323,11 +424,17 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               );
               const actualEnergyGain = nextEnergyAfterReward - nextEnergy;
               nextEnergy = nextEnergyAfterReward;
-              rewardSummary = `Stage ${result.previousStage} 撃破 / EXP +${bossExp}, SP +${bossSp}, Energy +${actualEnergyGain}`;
-              nextLog.unshift(`Stage ${result.previousStage} を撃破。次のボスが出現した。`);
-              if (grantedSkillName) {
-                nextLog.unshift(`ボーナススキル獲得: ${grantedSkillName}`);
-              }
+
+              rewardSummary = [
+                `Stage ${battle.previousStage} 撃破`,
+                `EXP +${bossExp}`,
+                `SP +${bossSp}`,
+                `Energy +${actualEnergyGain}`,
+                battle.summary.equipmentDrop ? `Drop: ${battle.summary.equipmentDrop.name}` : null,
+                grantedSkillName ? `Bonus skill: ${grantedSkillName}` : null,
+              ]
+                .filter(Boolean)
+                .join(" / ");
             } else {
               nextEnergy = clamp(nextEnergy, 0, getEnergyCap(nextMonster));
             }
@@ -339,14 +446,19 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 energy: nextEnergy,
               },
               raid: {
-                boss,
-                lastDamage: result.damage,
+                boss: battle.boss,
+                lastDamage: battle.summary.damageToBoss,
                 lastRewardSummary: rewardSummary,
-                log: nextLog.slice(0, 12),
+                lastBattle: battle.summary,
+                log: nextLog.slice(0, 18),
               },
-              lastActionMessage: result.defeated
+              equipmentInventory: nextInventory,
+              equippedSlots: nextEquippedSlots,
+              lastActionMessage: battle.defeated
                 ? `レイド勝利。${rewardSummary ?? ""}`
-                : `レイド攻撃で ${result.damage} ダメージ。`,
+                : `レイド結果: ${battle.summary.outcome} / ${battle.summary.damageToBoss} ダメージ / Drop ${
+                    battle.summary.equipmentDrop?.name ?? "なし"
+                  }`,
             };
           }),
 

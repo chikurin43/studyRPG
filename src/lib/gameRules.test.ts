@@ -5,10 +5,12 @@ import {
   createInitialRaidBoss,
   createTimerBonusSnapshot,
   expToNextLevel,
+  generateEquipment,
   generateLevelChoiceSet,
+  getRaidReadyStats,
   grantMonsterExperience,
   grantRandomSkill,
-  resolveRaidAttack,
+  simulateRaidBattle,
 } from "@/lib/gameRules";
 import type { Monster, MonsterSkill, Task } from "@/types/game";
 
@@ -77,16 +79,17 @@ describe("gameRules", () => {
     expect(reward.energy).toBe(30);
   });
 
-  it("queues one level-up choice set per level gained", () => {
+  it("queues one level-up choice set per level gained and increases MP too", () => {
     const result = grantMonsterExperience(createInitialMonster(), 260, () => 0);
 
     expect(result.monster.level).toBe(3);
     expect(result.monster.exp).toBe(0);
     expect(result.monster.pendingLevelChoices).toHaveLength(2);
-    expect(result.monster.stats.hp).toBe(124);
+    expect(result.monster.stats.hp).toBe(134);
+    expect(result.monster.stats.mp).toBe(54);
     expect(result.monster.stats.attack).toBe(26);
     expect(result.monster.stats.defense).toBe(16);
-    expect(result.monster.stats.speed).toBe(14);
+    expect(result.monster.stats.speed).toBe(15);
     expect(expToNextLevel(result.monster.level)).toBe(220);
   });
 
@@ -99,43 +102,54 @@ describe("gameRules", () => {
     expect(second.skill?.signature).not.toBe(first.skill?.signature);
   });
 
-  it("keeps raid hp between days and locks the same local day", () => {
-    const weakResult = resolveRaidAttack(
-      createInitialMonster(),
+  it("builds raid-ready combat stats from equipment and passive effects", () => {
+    const monster = createInitialMonster();
+    const weapon = generateEquipment(6, () => 0.9, "weapon", "epic");
+    const relic = generateEquipment(6, () => 0.4, "relic", "rare");
+    const profile = getRaidReadyStats(
+      monster,
+      [weapon, relic],
+      {
+        weapon: weapon.id,
+        armor: null,
+        relic: relic.id,
+      },
+    );
+
+    expect(profile.attack).toBeGreaterThan(monster.stats.attack);
+    expect(profile.mp).toBeGreaterThan(monster.stats.mp);
+    expect(profile.speed).toBeGreaterThan(monster.stats.speed);
+  });
+
+  it("simulates a multi-turn raid battle with boss hp persistence and equipment drops", () => {
+    const monster = createInitialMonster();
+    const weapon = generateEquipment(5, () => 0.85, "weapon", "epic");
+    const armor = generateEquipment(5, () => 0.2, "armor", "rare");
+    const relic = generateEquipment(5, () => 0.6, "relic", "rare");
+
+    const result = simulateRaidBattle(
+      monster,
       createInitialRaidBoss(),
-      () => 0,
+      [weapon, armor, relic],
+      {
+        weapon: weapon.id,
+        armor: armor.id,
+        relic: relic.id,
+      },
+      () => 0.3,
       new Date("2026-04-26T12:00:00+09:00"),
     );
 
-    expect(weakResult.result.defeated).toBe(false);
-    expect(weakResult.boss.currentHp).toBeLessThan(weakResult.boss.maxHp);
-    expect(weakResult.boss.lastAttemptDate).toBe("2026-04-26");
+    expect(result.summary.turns).toBeGreaterThan(1);
+    expect(result.summary.damageToBoss).toBeGreaterThan(0);
+    expect(result.boss.lastAttemptDate).toBe("2026-04-26");
+    expect(result.summary.equipmentDrop).not.toBeNull();
     expect(
-      canAttemptRaid(weakResult.boss, 100, new Date("2026-04-26T21:00:00+09:00")).allowed,
+      canAttemptRaid(result.boss, 100, new Date("2026-04-26T21:00:00+09:00")).allowed,
     ).toBe(false);
-
-    const strongMonster = {
-      ...createInitialMonster(),
-      stats: {
-        ...createInitialMonster().stats,
-        attack: 200,
-      },
-    };
-    const strongResult = resolveRaidAttack(
-      strongMonster,
-      createInitialRaidBoss(),
-      () => 0.5,
-      new Date("2026-04-27T08:00:00+09:00"),
-    );
-
-    expect(strongResult.result.defeated).toBe(true);
-    expect(strongResult.boss.stage).toBe(2);
-    expect(strongResult.boss.maxHp).toBe(120);
-    expect(strongResult.boss.attack).toBe(14);
-    expect(strongResult.boss.lastAttemptDate).toBe("2026-04-27");
   });
 
-  it("keeps generated skill choices unique inside a level-up set", () => {
+  it("generated level-up skill choices stay unique", () => {
     const monster = createInitialMonster();
     monster.skills.push(
       buildSkill({

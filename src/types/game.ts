@@ -1,6 +1,11 @@
 export type ViewId = "tasks" | "monster" | "raid";
 export type TaskStatus = "idle" | "running" | "completed";
-export type StatKey = "hp" | "attack" | "defense" | "speed";
+export type StatKey = "hp" | "mp" | "attack" | "defense" | "speed";
+export type Element = "physical" | "fire" | "ice" | "lightning";
+export type StatusEffectType = "burn" | "shock" | "frostbite";
+export type EquipmentSlot = "weapon" | "armor" | "relic";
+export type EquipmentRarity = "common" | "rare" | "epic" | "legendary";
+
 export type SkillTemplate = "attack" | "buff" | "reward" | "efficiency";
 export type SkillTarget = "self" | "nextTask" | "raid" | "passive";
 export type SkillEffectKey =
@@ -16,6 +21,7 @@ export type PerkKey = "taskRewardMultiplier" | "raidDamageMultiplier" | "energyC
 
 export interface MonsterStats {
   hp: number;
+  mp: number;
   attack: number;
   defense: number;
   speed: number;
@@ -110,14 +116,96 @@ export interface Resources {
   energy: number;
 }
 
+export interface EquipmentStatusEffect {
+  type: StatusEffectType;
+  durationTurns: number;
+  potencyPct: number;
+}
+
+export interface EquipmentGuardEffect {
+  physicalReductionPct: number;
+  elementalReductionPct: number;
+  durationHits: number;
+}
+
+export interface EquipmentActiveSkill {
+  id: string;
+  generatorSignature: string;
+  family: "attack" | "guard";
+  name: string;
+  description: string;
+  mpCost: number;
+  element: Element;
+  powerPct: number | null;
+  statusEffect: EquipmentStatusEffect | null;
+  guardEffect: EquipmentGuardEffect | null;
+}
+
+export interface EquipmentPassiveSkill {
+  id: string;
+  generatorSignature: string;
+  category: "elementBoost" | "statusResist" | "mpRegen" | "statBoost";
+  name: string;
+  description: string;
+  valuePct: number;
+  element?: Element;
+  statusType?: StatusEffectType;
+  stat?: StatKey;
+}
+
+export interface Equipment {
+  id: string;
+  slot: EquipmentSlot;
+  name: string;
+  rarity: EquipmentRarity;
+  dropStage: number;
+  statBonuses: MonsterStats;
+  activeSkill: EquipmentActiveSkill;
+  passiveSkill: EquipmentPassiveSkill;
+}
+
+export type EquippedSlots = Record<EquipmentSlot, string | null>;
+
 export interface RaidBoss {
   stage: number;
   level: number;
   maxHp: number;
   currentHp: number;
   attack: number;
+  defense: number;
+  speed: number;
+  element: Element;
   energyCost: number;
   lastAttemptDate: string | null;
+}
+
+export interface CombatStatusState {
+  type: StatusEffectType;
+  durationTurns: number;
+  potencyPct: number;
+}
+
+export interface CombatGuardState {
+  physicalReductionPct: number;
+  elementalReductionPct: number;
+  remainingHits: number;
+}
+
+export interface RaidBattleLogEntry {
+  turn: number;
+  actor: "monster" | "boss" | "system";
+  text: string;
+}
+
+export interface RaidBattleSummary {
+  outcome: "victory" | "defeat" | "stalled";
+  turns: number;
+  damageToBoss: number;
+  bossRemainingHp: number;
+  monsterRemainingHp: number;
+  monsterRemainingMp: number;
+  equipmentDrop: Equipment | null;
+  log: RaidBattleLogEntry[];
 }
 
 export interface RaidState {
@@ -125,6 +213,7 @@ export interface RaidState {
   lastDamage: number;
   lastRewardSummary: string | null;
   log: string[];
+  lastBattle: RaidBattleSummary | null;
 }
 
 export interface PersistedGameState {
@@ -133,6 +222,8 @@ export interface PersistedGameState {
   monster: Monster;
   resources: Resources;
   raid: RaidState;
+  equipmentInventory: Equipment[];
+  equippedSlots: EquippedSlots;
 }
 
 export interface CompletionReward {
@@ -145,8 +236,21 @@ export interface CompletionReward {
   energyGainPct: number;
 }
 
-export interface RaidAttackResult {
-  damage: number;
+export interface CombatProfile {
+  hp: number;
+  mp: number;
+  attack: number;
+  defense: number;
+  speed: number;
+  raidDamagePct: number;
+  mpRegenPct: number;
+  elementDamagePct: Record<Element, number>;
+  statusResistPct: Record<StatusEffectType, number>;
+}
+
+export interface SimulatedRaidBattle {
+  boss: RaidBoss;
+  summary: RaidBattleSummary;
   defeated: boolean;
   today: string;
   previousStage: number;
