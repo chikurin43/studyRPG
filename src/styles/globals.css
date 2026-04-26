@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+:root {
+  --bg-deep: #15161d;
+  --bg-surface: #1f2129;
+  --bg-panel: rgba(251, 246, 233, 0.94);
+  --bg-panel-strong: rgba(255, 252, 244, 0.98);
+  --ink-strong: #231f17;
+  --ink-soft: #5f5546;
+  --line-soft: rgba(57, 48, 37, 0.12);
+  --line-strong: rgba(57, 48, 37, 0.24);
+  --accent-moss: #59734f;
+  --accent-ember: #c96a3d;
+  --accent-sky: #3d667d;
+  --accent-gold: #cda75f;
+  --danger: #a64432;
+  --success: #3d7e5d;
+  font-family: "Zen Kaku Gothic New", sans-serif;
+  color: var(--ink-strong);
+  background: var(--bg-deep);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top, rgba(205, 167, 95, 0.16), transparent 40%),
+    radial-gradient(circle at bottom left, rgba(61, 102, 125, 0.16), transparent 32%),
+    linear-gradient(180deg, #101217 0%, #15161d 100%);
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink-strong);
+  background:
+    linear-gradient(180deg, rgba(8, 9, 12, 0.15), rgba(8, 9, 12, 0.1)),
+    transparent;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 40px 40px;
+  content: "";
+  pointer-events: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.font-display {
+  font-family: "Unbounded", sans-serif;
+}
+
+.panel-texture {
+  background-image:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), transparent 35%),
+    radial-gradient(circle at top right, rgba(201, 106, 61, 0.08), transparent 35%);
+}
