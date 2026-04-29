@@ -115,13 +115,18 @@ export function TasksView() {
                 <label className="text-sm font-medium text-[var(--ink-soft)]" htmlFor="task-subject">
                   科目
                 </label>
-                <input
+                <select
                   id="task-subject"
                   value={subject}
                   onChange={(event) => setSubject(event.target.value)}
-                  className="h-12 text-[var(--ink-soft)] rounded-2xl border border-[var(--line-soft)] bg-white px-4 outline-none transition focus:border-[var(--accent-sky)]"
-                  placeholder="英語 / 数学"
-                />
+                  className="h-12 text-[var(--ink-strong)] rounded-2xl border border-[var(--line-soft)] bg-white px-4 outline-none transition focus:border-[var(--accent-sky)]"
+                >
+                  {["英語", "数学", "国語", "社会", "理科", "その他"].map((subject) => (
+                    <option key={subject} value={subject}>
+                      {subject}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid gap-2">

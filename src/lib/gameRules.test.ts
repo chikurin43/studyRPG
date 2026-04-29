@@ -104,8 +104,8 @@ describe("gameRules", () => {
 
   it("builds raid-ready combat stats from equipment and passive effects", () => {
     const monster = createInitialMonster();
-    const weapon = generateEquipment(6, () => 0.9, "weapon", "epic");
-    const relic = generateEquipment(6, () => 0.4, "relic", "rare");
+    const weapon = generateEquipment(6, () => 0.9, "weapon", "S");
+    const relic = generateEquipment(6, () => 0.4, "relic", "A");
     const profile = getRaidReadyStats(
       monster,
       [weapon, relic],
@@ -123,9 +123,9 @@ describe("gameRules", () => {
 
   it("simulates a multi-turn raid battle with boss hp persistence and equipment drops", () => {
     const monster = createInitialMonster();
-    const weapon = generateEquipment(5, () => 0.85, "weapon", "epic");
-    const armor = generateEquipment(5, () => 0.2, "armor", "rare");
-    const relic = generateEquipment(5, () => 0.6, "relic", "rare");
+    const weapon = generateEquipment(5, () => 0.85, "weapon", "S");
+    const armor = generateEquipment(5, () => 0.2, "armor", "A");
+    const relic = generateEquipment(5, () => 0.6, "relic", "A");
 
     const result = simulateRaidBattle(
       monster,

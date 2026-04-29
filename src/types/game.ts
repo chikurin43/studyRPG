@@ -2,9 +2,9 @@ export type ViewId = "tasks" | "monster" | "raid";
 export type TaskStatus = "idle" | "running" | "completed";
 export type StatKey = "hp" | "mp" | "attack" | "defense" | "speed";
 export type Element = "physical" | "fire" | "ice" | "lightning";
-export type StatusEffectType = "burn" | "shock" | "frostbite";
+export type StatusEffectType = "burn" | "shock" | "frostbite" | "stun" | "slow" | "defenseDown" | "darkness" | "seal" | "bleed";
 export type EquipmentSlot = "weapon" | "armor" | "relic";
-export type EquipmentRarity = "common" | "rare" | "epic" | "legendary";
+export type EquipmentRarity = "C" | "B" | "A" | "S" | "SS" | "SSS";
 
 export type SkillTemplate = "attack" | "buff" | "reward" | "efficiency";
 export type SkillTarget = "self" | "nextTask" | "raid" | "passive";
@@ -139,6 +139,17 @@ export interface EquipmentActiveSkill {
   powerPct: number | null;
   statusEffect: EquipmentStatusEffect | null;
   guardEffect: EquipmentGuardEffect | null;
+  tags: string[];
+  condition?: string;
+  multiplier?: number;
+  durationTurns?: number;
+  stackable?: boolean;
+  piercePct?: number;
+  extraDamagePct?: number;
+  threshold?: number;
+  pierceBonusElement?: Element;
+  reflectPct?: number;
+  reflectMultiplier?: number;
 }
 
 export interface EquipmentPassiveSkill {
@@ -151,6 +162,10 @@ export interface EquipmentPassiveSkill {
   element?: Element;
   statusType?: StatusEffectType;
   stat?: StatKey;
+  tags: string[];
+  condition: string;
+  threshold?: number;
+  cooldown?: number;
 }
 
 export interface Equipment {
@@ -177,6 +192,8 @@ export interface RaidBoss {
   element: Element;
   energyCost: number;
   lastAttemptDate: string | null;
+  activeSkills: EquipmentActiveSkill[];
+  passiveSkills: EquipmentPassiveSkill[];
 }
 
 export interface CombatStatusState {
@@ -214,6 +231,11 @@ export interface RaidState {
   lastRewardSummary: string | null;
   log: string[];
   lastBattle: RaidBattleSummary | null;
+  battleInProgress: boolean;
+  currentTurn: number;
+  monsterBattleState: any | null;
+  bossBattleState: any | null;
+  battleLog: RaidBattleLogEntry[];
 }
 
 export interface PersistedGameState {
@@ -246,6 +268,8 @@ export interface CombatProfile {
   mpRegenPct: number;
   elementDamagePct: Record<Element, number>;
   statusResistPct: Record<StatusEffectType, number>;
+  criticalRate: number;
+  criticalDamage: number;
 }
 
 export interface SimulatedRaidBattle {

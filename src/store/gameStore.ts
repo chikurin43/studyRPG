@@ -8,20 +8,28 @@ import {
   clamp,
   createEmptyTimer,
   createInitialGameState,
+  createNextRaidBoss,
   createTimerBonusSnapshot,
+  executeBattleTurn,
   expToNextLevel,
+  generateEquipment,
+  getAvailableActions,
   getEnergyCap,
+  getEquippedItems,
   getEquipmentSkillRerollCost,
   getLevelChoiceRerollCost,
   getSlotLabel,
   getTaskDurationMs,
   grantMonsterExperience,
   grantRandomSkill,
+  initializeBattleState,
+  MAX_BATTLE_TURNS,
   normalizePersistedGameState,
   rerollChoiceSet,
   rerollEquipmentActiveSkill,
   rerollEquipmentPassiveSkill,
   simulateRaidBattle,
+  toLocalDateKey,
 } from "@/lib/gameRules";
 import type {
   Equipment,
@@ -30,6 +38,7 @@ import type {
   TimerBonusSnapshot,
   ViewId,
 } from "@/types/game";
+import type { BattleAction } from "@/lib/gameRules";
 
 type StoreDependencies = {
   storage?: StateStorage;
@@ -60,6 +69,9 @@ type Actions = {
   equipItem: (equipmentId: string) => void;
   rerollEquipmentSkill: (equipmentId: string, skillType: "active" | "passive") => void;
   attackRaidBoss: () => void;
+  startRaidBattle: () => void;
+  executePlayerAction: (action: BattleAction) => void;
+  endBattle: () => void;
   resetGame: () => void;
 };
 
@@ -451,6 +463,11 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 lastRewardSummary: rewardSummary,
                 lastBattle: battle.summary,
                 log: nextLog.slice(0, 18),
+                battleInProgress: false,
+                currentTurn: 0,
+                monsterBattleState: null,
+                bossBattleState: null,
+                battleLog: [],
               },
               equipmentInventory: nextInventory,
               equippedSlots: nextEquippedSlots,
@@ -461,6 +478,204 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                   }`,
             };
           }),
+
+        startRaidBattle: () =>
+          set((state) => {
+            const actionTime = now();
+            const raidCheck = canAttemptRaid(state.raid.boss, state.resources.energy, actionTime);
+            if (!raidCheck.allowed) {
+              return {
+                lastActionMessage: raidCheck.reason,
+              };
+            }
+
+            const { monsterState, bossState, battleLog } = initializeBattleState(
+              state.monster,
+              state.raid.boss,
+              state.equipmentInventory,
+              state.equippedSlots,
+            );
+
+            return {
+              resources: {
+                ...state.resources,
+                energy: state.resources.energy - state.raid.boss.energyCost,
+              },
+              raid: {
+                ...state.raid,
+                battleInProgress: true,
+                currentTurn: 1,
+                monsterBattleState: monsterState,
+                bossBattleState: bossState,
+                battleLog,
+              },
+              lastActionMessage: "バトルを開始しました。",
+            };
+          }),
+
+        executePlayerAction: (action) =>
+          set((state) => {
+            if (!state.raid.battleInProgress || !state.raid.monsterBattleState || !state.raid.bossBattleState) {
+              return {
+                lastActionMessage: "バトルが進行中ではありません。",
+              };
+            }
+
+            const actionTime = now();
+            const equippedItems = getEquippedItems(state.equipmentInventory, state.equippedSlots);
+            const { monsterState, bossState, battleLog } = executeBattleTurn(
+              state.raid.monsterBattleState,
+              state.raid.bossBattleState,
+              action,
+              state.raid.boss.activeSkills,
+              equippedItems,
+              random,
+              state.raid.currentTurn,
+            );
+
+            const battleEnded = monsterState.hp <= 0 || bossState.hp <= 0 || state.raid.currentTurn >= MAX_BATTLE_TURNS;
+            const defeated = bossState.hp <= 0;
+
+            if (battleEnded) {
+              const bossStartingHp = state.raid.boss.maxHp;
+              const damageToBoss = bossStartingHp - bossState.hp;
+              const outcome = bossState.hp <= 0 ? "victory" : monsterState.hp <= 0 ? "defeat" : "stalled";
+              const equipmentDrop = generateEquipment(defeated ? state.raid.boss.stage + 1 : state.raid.boss.stage, random);
+
+              let nextMonster = state.monster;
+              let nextSp = state.resources.sp;
+              let rewardSummary = equipmentDrop ? `装備ドロップ: ${equipmentDrop.name}` : null;
+
+              if (defeated) {
+                const bossExp = 150 * state.raid.boss.stage;
+                const bossSp = 15 * state.raid.boss.stage;
+                const bonusEnergy = 20;
+                let grantedSkillName: string | null = null;
+
+                nextMonster = grantMonsterExperience(nextMonster, bossExp, random).monster;
+                nextSp += bossSp;
+
+                if (random() < 0.6) {
+                  const skillGrant = grantRandomSkill(nextMonster, random);
+                  nextMonster = skillGrant.monster;
+                  grantedSkillName = skillGrant.skill?.name ?? null;
+                }
+
+                const nextEnergy = clamp(
+                  state.resources.energy + bonusEnergy,
+                  0,
+                  getEnergyCap(nextMonster),
+                );
+
+                rewardSummary = [
+                  `Stage ${state.raid.boss.stage} 撃破`,
+                  `EXP +${bossExp}`,
+                  `SP +${bossSp}`,
+                  `Energy +${nextEnergy - state.resources.energy}`,
+                  equipmentDrop ? `Drop: ${equipmentDrop.name}` : null,
+                  grantedSkillName ? `Bonus skill: ${grantedSkillName}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" / ");
+
+                const nextBoss = createNextRaidBoss(state.raid.boss, toLocalDateKey(actionTime), random);
+                const nextInventory = equipmentDrop ? [equipmentDrop, ...state.equipmentInventory] : state.equipmentInventory;
+                const nextEquippedSlots = maybeAutoEquip(nextInventory, state.equippedSlots, equipmentDrop);
+
+                return {
+                  monster: nextMonster,
+                  resources: {
+                    sp: nextSp,
+                    energy: nextEnergy,
+                  },
+                  raid: {
+                    boss: nextBoss,
+                    lastDamage: damageToBoss,
+                    lastRewardSummary: rewardSummary,
+                    lastBattle: {
+                      outcome,
+                      turns: state.raid.currentTurn,
+                      damageToBoss,
+                      bossRemainingHp: bossState.hp,
+                      monsterRemainingHp: monsterState.hp,
+                      monsterRemainingMp: monsterState.mp,
+                      equipmentDrop,
+                      log: [...state.raid.battleLog, ...battleLog].slice(-24),
+                    },
+                    log: [
+                      `Stage ${state.raid.boss.stage}: ${outcome} / ${damageToBoss} total damage`,
+                      ...battleLog.map((entry) => entry.text),
+                    ],
+                    battleInProgress: false,
+                    currentTurn: 0,
+                    monsterBattleState: null,
+                    bossBattleState: null,
+                    battleLog: [],
+                  },
+                  equipmentInventory: nextInventory,
+                  equippedSlots: nextEquippedSlots,
+                  lastActionMessage: `レイド${outcome === "victory" ? "勝利" : "終了"}。${rewardSummary ?? ""}`,
+                };
+              }
+
+              const nextInventory = equipmentDrop ? [equipmentDrop, ...state.equipmentInventory] : state.equipmentInventory;
+              const nextEquippedSlots = maybeAutoEquip(nextInventory, state.equippedSlots, equipmentDrop);
+
+              return {
+                equipmentInventory: nextInventory,
+                equippedSlots: nextEquippedSlots,
+                raid: {
+                  ...state.raid,
+                  boss: {
+                    ...state.raid.boss,
+                    currentHp: bossState.hp,
+                    lastAttemptDate: toLocalDateKey(actionTime),
+                  },
+                  lastDamage: damageToBoss,
+                  lastBattle: {
+                    outcome,
+                    turns: state.raid.currentTurn,
+                    damageToBoss,
+                    bossRemainingHp: bossState.hp,
+                    monsterRemainingHp: monsterState.hp,
+                    monsterRemainingMp: monsterState.mp,
+                    equipmentDrop,
+                    log: [...state.raid.battleLog, ...battleLog].slice(-24),
+                  },
+                  battleInProgress: false,
+                  currentTurn: 0,
+                  monsterBattleState: null,
+                  bossBattleState: null,
+                  battleLog: [],
+                },
+                lastActionMessage: `バトル${outcome === "victory" ? "勝利" : "終了"}。${rewardSummary ?? ""}`,
+              };
+            }
+
+            return {
+              raid: {
+                ...state.raid,
+                currentTurn: state.raid.currentTurn + 1,
+                monsterBattleState: monsterState,
+                bossBattleState: bossState,
+                battleLog: [...state.raid.battleLog, ...battleLog],
+              },
+              lastActionMessage: `${action.name}を使用しました。`,
+            };
+          }),
+
+        endBattle: () =>
+          set((state) => ({
+            raid: {
+              ...state.raid,
+              battleInProgress: false,
+              currentTurn: 0,
+              monsterBattleState: null,
+              bossBattleState: null,
+              battleLog: [],
+            },
+            lastActionMessage: "バトルを中断しました。",
+          })),
 
         resetGame: () =>
           set(() => ({

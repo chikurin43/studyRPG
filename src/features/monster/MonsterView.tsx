@@ -12,6 +12,7 @@ import {
   getLevelChoiceRerollCost,
   getRaidReadyStats,
   getRarityLabel,
+  getSkillRarityFromSignature,
   getSlotLabel,
 } from "@/lib/gameRules";
 import { useGameStore } from "@/store/gameStore";
@@ -108,6 +109,8 @@ export function MonsterView() {
                 <Badge tone="moss">Energy cap {getEnergyCap(monster)}</Badge>
                 <Badge tone="ember">SP {resources.sp}</Badge>
                 <Badge>MP regen +{raidProfile.mpRegenPct}%</Badge>
+                <Badge tone="ember">Crit {raidProfile.criticalRate}%</Badge>
+                <Badge tone="ember">CritDmg {raidProfile.criticalDamage}%</Badge>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {Object.entries(raidProfile.elementDamagePct)
@@ -206,7 +209,7 @@ export function MonsterView() {
               <article key={slot} className="rounded-[24px] border border-[var(--line-soft)] bg-white/70 p-5">
                 <div className="flex items-center gap-2">
                   <Badge tone="sky">{getSlotLabel(slot)}</Badge>
-                  {item ? <Badge tone="ember">{getRarityLabel(item.rarity)}</Badge> : null}
+                  {item ? <Badge tone={item.rarity === "SSS" ? "ember" : item.rarity === "SS" || item.rarity === "S" ? "sky" : "moss"}>{getRarityLabel(item.rarity)}</Badge> : null}
                 </div>
                 {item ? (
                   <>
@@ -219,9 +222,19 @@ export function MonsterView() {
                       <Badge tone="moss">SPD +{item.statBonuses.speed}</Badge>
                     </div>
                     <div className="mt-4 rounded-[18px] bg-stone-950/5 p-4">
-                      <div className="flex items-center gap-2">
-                        <Swords className="h-4 w-4 text-[var(--accent-ember)]" />
-                        <p className="font-medium text-[var(--ink-strong)]">{item.activeSkill.name}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Swords className="h-4 w-4 text-[var(--accent-ember)]" />
+                          <p className="font-medium text-[var(--ink-strong)]">{item.activeSkill.name}</p>
+                        </div>
+                        {(() => {
+                          const skillRarity = getSkillRarityFromSignature(item.activeSkill.generatorSignature);
+                          return skillRarity ? (
+                            <Badge tone={skillRarity === "SSS" ? "ember" : skillRarity === "SS" || skillRarity === "S" ? "sky" : "moss"}>
+                              {getRarityLabel(skillRarity)}
+                            </Badge>
+                          ) : null;
+                        })()}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
                         {item.activeSkill.description} / MP {item.activeSkill.mpCost}
@@ -238,9 +251,19 @@ export function MonsterView() {
                       </Button>
                     </div>
                     <div className="mt-4 rounded-[18px] bg-stone-950/5 p-4">
-                      <div className="flex items-center gap-2">
-                        <Shield className="h-4 w-4 text-[var(--accent-sky)]" />
-                        <p className="font-medium text-[var(--ink-strong)]">{item.passiveSkill.name}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Shield className="h-4 w-4 text-[var(--accent-sky)]" />
+                          <p className="font-medium text-[var(--ink-strong)]">{item.passiveSkill.name}</p>
+                        </div>
+                        {(() => {
+                          const skillRarity = getSkillRarityFromSignature(item.passiveSkill.generatorSignature);
+                          return skillRarity ? (
+                            <Badge tone={skillRarity === "SSS" ? "ember" : skillRarity === "SS" || skillRarity === "S" ? "sky" : "moss"}>
+                              {getRarityLabel(skillRarity)}
+                            </Badge>
+                          ) : null;
+                        })()}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
                       <Button
@@ -285,7 +308,7 @@ export function MonsterView() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="text-xl font-semibold text-[var(--ink-strong)]">{item.name}</h3>
                       <Badge tone="sky">{getSlotLabel(item.slot)}</Badge>
-                      <Badge tone={item.rarity === "legendary" ? "ember" : item.rarity === "epic" ? "sky" : "moss"}>
+                      <Badge tone={item.rarity === "SSS" ? "ember" : item.rarity === "SS" || item.rarity === "S" ? "sky" : "moss"}>
                         {getRarityLabel(item.rarity)}
                       </Badge>
                       {isEquipped ? <Badge tone="moss">装備中</Badge> : null}
@@ -300,18 +323,38 @@ export function MonsterView() {
                     </div>
                     <div className="grid gap-3 lg:grid-cols-2">
                       <div className="rounded-[18px] bg-stone-950/5 p-4">
-                        <div className="flex items-center gap-2">
-                          <Swords className="h-4 w-4 text-[var(--accent-ember)]" />
-                          <p className="font-medium text-[var(--ink-strong)]">
-                            {item.activeSkill.name} / MP {item.activeSkill.mpCost}
-                          </p>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <Swords className="h-4 w-4 text-[var(--accent-ember)]" />
+                            <p className="font-medium text-[var(--ink-strong)]">
+                              {item.activeSkill.name} / MP {item.activeSkill.mpCost}
+                            </p>
+                          </div>
+                          {(() => {
+                            const skillRarity = getSkillRarityFromSignature(item.activeSkill.generatorSignature);
+                            return skillRarity ? (
+                              <Badge tone={skillRarity === "SSS" ? "ember" : skillRarity === "SS" || skillRarity === "S" ? "sky" : "moss"}>
+                                {getRarityLabel(skillRarity)}
+                              </Badge>
+                            ) : null;
+                          })()}
                         </div>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
                       </div>
                       <div className="rounded-[18px] bg-stone-950/5 p-4">
-                        <div className="flex items-center gap-2">
-                          <WandSparkles className="h-4 w-4 text-[var(--accent-sky)]" />
-                          <p className="font-medium text-[var(--ink-strong)]">{item.passiveSkill.name}</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <WandSparkles className="h-4 w-4 text-[var(--accent-sky)]" />
+                            <p className="font-medium text-[var(--ink-strong)]">{item.passiveSkill.name}</p>
+                          </div>
+                          {(() => {
+                            const skillRarity = getSkillRarityFromSignature(item.passiveSkill.generatorSignature);
+                            return skillRarity ? (
+                              <Badge tone={skillRarity === "SSS" ? "ember" : skillRarity === "SS" || skillRarity === "S" ? "sky" : "moss"}>
+                                {getRarityLabel(skillRarity)}
+                              </Badge>
+                            ) : null;
+                          })()}
                         </div>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
                       </div>
