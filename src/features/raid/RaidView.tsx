@@ -194,7 +194,7 @@ export function RaidView() {
           </div>
 
           <div className="mt-5 space-y-3">
-            {raid.battleLog.map((entry, index) => (
+            {raid.battleLog.toReversed().map((entry, index) => (
               <article
                 key={`${entry.turn}-${index}-${entry.text}`}
                 className="flex items-start gap-3 rounded-[20px] border border-[var(--line-soft)] bg-white/65 px-4 py-3"
@@ -401,7 +401,7 @@ export function RaidView() {
               </div>
 
               <div className="space-y-3">
-                {raid.lastBattle.log.map((entry, index) => (
+                {raid.lastBattle.log.toReversed().map((entry, index) => (
                   <article
                     key={`${entry.turn}-${index}-${entry.text}`}
                     className="flex items-start gap-3 rounded-[20px] border border-[var(--line-soft)] bg-white/65 px-4 py-3"

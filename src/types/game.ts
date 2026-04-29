@@ -270,6 +270,7 @@ export interface CombatProfile {
   statusResistPct: Record<StatusEffectType, number>;
   criticalRate: number;
   criticalDamage: number;
+  thresholdPassives: EquipmentPassiveSkill[];
 }
 
 export interface SimulatedRaidBattle {

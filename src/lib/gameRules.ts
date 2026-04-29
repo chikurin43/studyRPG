@@ -58,6 +58,7 @@ export type CombatantState = {
   reflectMultiplier: number;
   criticalRate: number;
   criticalDamage: number;
+  thresholdPassives: EquipmentPassiveSkill[];
 };
 
 type SkillBlueprint = {
@@ -105,6 +106,7 @@ export type BattleAction = {
   stackable?: boolean;
   reflectPct?: number;
   reflectMultiplier?: number;
+  description?: string;
 };
 
 const ELEMENTS: Element[] = ["physical", "fire", "ice", "lightning"];
@@ -1701,9 +1703,17 @@ function createEquipmentName(slot: EquipmentSlot, rarity: EquipmentRarity, activ
   return `${RARITY_LABELS[rarity]} ${prefix} ${slotWord}`;
 }
 
-function aggregateEquipmentPassives(items: Equipment[]): EquipmentPassiveBonuses {
-  return items.reduce<EquipmentPassiveBonuses>((accumulator, item) => {
+function aggregateEquipmentPassives(items: Equipment[]): { bonuses: EquipmentPassiveBonuses; thresholdPassives: EquipmentPassiveSkill[] } {
+  const thresholdPassives: EquipmentPassiveSkill[] = [];
+  
+  const bonuses = items.reduce<EquipmentPassiveBonuses>((accumulator, item) => {
     const passive = item.passiveSkill;
+
+    // Skip threshold-based passives - they'll be applied dynamically
+    if (passive.threshold !== undefined) {
+      thresholdPassives.push(passive);
+      return accumulator;
+    }
 
     if (passive.category === "elementBoost" && passive.element) {
       accumulator.elementDamagePct[passive.element] += passive.valuePct;
@@ -1732,10 +1742,20 @@ function aggregateEquipmentPassives(items: Equipment[]): EquipmentPassiveBonuses
 
     return accumulator;
   }, clone(EMPTY_PASSIVE_BONUSES));
+
+  return { bonuses, thresholdPassives };
 }
 
-function aggregateBossPassives(passiveSkills: EquipmentPassiveSkill[]): EquipmentPassiveBonuses {
-  return passiveSkills.reduce<EquipmentPassiveBonuses>((accumulator, passive) => {
+function aggregateBossPassives(passiveSkills: EquipmentPassiveSkill[]): { bonuses: EquipmentPassiveBonuses; thresholdPassives: EquipmentPassiveSkill[] } {
+  const thresholdPassives: EquipmentPassiveSkill[] = [];
+  
+  const bonuses = passiveSkills.reduce<EquipmentPassiveBonuses>((accumulator, passive) => {
+    // Skip threshold-based passives - they'll be applied dynamically
+    if (passive.threshold !== undefined) {
+      thresholdPassives.push(passive);
+      return accumulator;
+    }
+
     if (passive.category === "elementBoost" && passive.element) {
       accumulator.elementDamagePct[passive.element] += passive.valuePct;
     }
@@ -1754,6 +1774,8 @@ function aggregateBossPassives(passiveSkills: EquipmentPassiveSkill[]): Equipmen
 
     return accumulator;
   }, clone(EMPTY_PASSIVE_BONUSES));
+
+  return { bonuses, thresholdPassives };
 }
 
 function getBossElementForStage(stage: number): Element {
@@ -1861,10 +1883,61 @@ function calculateDamage(
   multiplier?: number,
   durationTurns?: number,
   forceCritical?: boolean,
+  log?: RaidBattleLogEntry[],
+  turn?: number,
 ): { mainDamage: number; extraDamage: number; isCritical: boolean } {
-  const attackerElementBonus = attacker.elementDamagePct[element] ?? 0;
+  // Apply threshold-based passive skills for attacker (怒気)
+  let dynamicAttackBonus = 0;
+  const attackerHpPct = attacker.hp / attacker.maxHp * 100;
+  for (const passive of attacker.thresholdPassives) {
+    if (passive.category === "elementBoost" && passive.threshold && attackerHpPct <= passive.threshold) {
+      dynamicAttackBonus += passive.valuePct;
+      if (log && turn) {
+        log.push({
+          turn,
+          actor: "system",
+          text: `${attacker.name} のパッシブ「${passive.name}」が発動！攻撃力が${passive.valuePct}%上昇した。`,
+        });
+      }
+      if (passive.threshold === 50 && attackerHpPct <= 25) {
+        const extraMatch = passive.description.match(/さらに(\d+)%追加上昇/);
+        if (extraMatch) {
+          const extraBonus = parseInt(extraMatch[1], 10);
+          dynamicAttackBonus += extraBonus;
+          if (log && turn) {
+            log.push({
+              turn,
+              actor: "system",
+              text: `${attacker.name} のパッシブ「${passive.name}」がさらに発動！攻撃力が追加で${extraBonus}%上昇した。`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const attackerElementBonus = (attacker.elementDamagePct[element] ?? 0) + dynamicAttackBonus;
   const attackBonusPct = attacker.actor === "monster" ? attacker.raidDamagePct : 0;
+
+  // Apply threshold-based passive skills for defender (不屈の守り - defense boost)
+  let dynamicDefenseBoost = 0;
+  const defenderHpPct = defender.hp / defender.maxHp * 100;
+  for (const passive of defender.thresholdPassives) {
+    if (passive.category === "statBoost" && passive.stat === "defense" && passive.threshold && defenderHpPct <= passive.threshold) {
+      dynamicDefenseBoost += passive.valuePct;
+      if (log && turn) {
+        log.push({
+          turn,
+          actor: "system",
+          text: `${defender.name} のパッシブ「${passive.name}」が発動！防御力が${passive.valuePct}%上昇した。`,
+        });
+      }
+    }
+  }
+  
   let defenseValue = getAdjustedDefense(defender);
+  defenseValue = Math.round(defenseValue * (1 + dynamicDefenseBoost / 100));
+  
   const triangle = getElementTriangleBonus(element, defender.element);
   const guardReduction = consumeGuardReduction(defender, element);
   const baseAttack = Math.round(attacker.attack * (1 + attacker.attackBuffPct / 100));
@@ -1971,7 +2044,7 @@ function tickStatuses(actor: CombatantState, log: RaidBattleLogEntry[], turn: nu
   }
 }
 
-function createMonsterBattleState(profile: CombatProfile): CombatantState {
+function createMonsterBattleState(profile: CombatProfile, thresholdPassives: EquipmentPassiveSkill[] = []): CombatantState {
   return {
     actor: "monster",
     name: "Monster",
@@ -2001,11 +2074,12 @@ function createMonsterBattleState(profile: CombatProfile): CombatantState {
     reflectMultiplier: 1.0,
     criticalRate: profile.criticalRate,
     criticalDamage: profile.criticalDamage,
+    thresholdPassives,
   };
 }
 
 function createBossBattleState(boss: RaidBoss): CombatantState {
-  const passiveBonuses = aggregateBossPassives(boss.passiveSkills);
+  const { bonuses: passiveBonuses, thresholdPassives } = aggregateBossPassives(boss.passiveSkills);
   const baseStats = {
     hp: boss.maxHp,
     mp: 100,
@@ -2049,6 +2123,7 @@ function createBossBattleState(boss: RaidBoss): CombatantState {
     reflectMultiplier: 1.0,
     criticalRate: 0,
     criticalDamage: 150,
+    thresholdPassives,
   };
 }
 
@@ -2137,6 +2212,7 @@ function chooseMonsterAction(
       stackable: selected.stackable,
       reflectPct: selected.reflectPct,
       reflectMultiplier: selected.reflectMultiplier,
+      description: selected.description,
     };
   }
 
@@ -2190,6 +2266,7 @@ function chooseBossAction(boss: CombatantState, bossSkills: EquipmentActiveSkill
       stackable: guardSkill.stackable,
       reflectPct: guardSkill.reflectPct,
       reflectMultiplier: guardSkill.reflectMultiplier,
+      description: guardSkill.description,
     };
   }
 
@@ -2221,6 +2298,7 @@ function chooseBossAction(boss: CombatantState, bossSkills: EquipmentActiveSkill
       stackable: selected.stackable,
       reflectPct: selected.reflectPct,
       reflectMultiplier: selected.reflectMultiplier,
+      description: selected.description,
     };
   }
 
@@ -2326,6 +2404,9 @@ function executeAction(
     action.pierceBonusElement,
     action.multiplier,
     action.durationTurns,
+    undefined,
+    log,
+    turn,
   );
   const totalDamage = mainDamage + extraDamage;
   defender.hp = Math.max(0, defender.hp - totalDamage);
@@ -2359,6 +2440,22 @@ function executeAction(
     });
   }
 
+  // Handle combo skills (連撃) - apply attack buff after hits
+  if (action.name.includes("連撃") && action.durationTurns && action.description) {
+    const buffMatch = action.description.match(/(\d+)%上昇する/);
+    if (buffMatch) {
+      const buffPct = parseInt(buffMatch[1], 10);
+      const turns = action.durationTurns;
+      attacker.attackBuffPct = buffPct;
+      attacker.attackBuffTurns = turns;
+      log.push({
+        turn,
+        actor: "system",
+        text: `${attacker.name} の ${action.name} が発動！攻撃力が${buffPct}%上昇した（${turns}ターン）。`,
+      });
+    }
+  }
+
   // Handle reflection damage
   if (defender.reflectPct > 0 && defender.reflectTurns > 0) {
     const reflectDamage = Math.round(totalDamage * (defender.reflectPct / 100));
@@ -2383,6 +2480,29 @@ function finishTurn(
   turn: number,
 ) {
   tickStatuses(actor, log, turn);
+  
+  // Apply threshold-based passive HP regeneration (不屈の守り)
+  if (actor.hp > 0) {
+    const hpPct = actor.hp / actor.maxHp * 100;
+    for (const passive of actor.thresholdPassives) {
+      if (passive.category === "statBoost" && passive.stat === "defense" && passive.threshold && hpPct <= passive.threshold) {
+        const regenMatch = passive.description.match(/最大HPの(\d+)%を回復/);
+        if (regenMatch) {
+          const regenPct = parseInt(regenMatch[1], 10);
+          const recoveredHp = Math.min(actor.maxHp - actor.hp, Math.round(actor.maxHp * regenPct / 100));
+          if (recoveredHp > 0) {
+            actor.hp += recoveredHp;
+            log.push({
+              turn,
+              actor: "system",
+              text: `${actor.name} は ${passive.name} で HP を ${recoveredHp} 回復した。`,
+            });
+          }
+        }
+      }
+    }
+  }
+  
   if (actor.actor === "monster" && actor.hp > 0) {
     const recoveredMp = Math.min(actor.maxMp - actor.mp, getMpRecovery(actor));
     if (recoveredMp > 0) {
@@ -2850,7 +2970,7 @@ export function getMonsterRaidProfile(
     (stats, item) => sumStats(stats, item.statBonuses),
     clone(EMPTY_STATS),
   );
-  const passiveBonuses = aggregateEquipmentPassives(equippedItems);
+  const { bonuses: passiveBonuses, thresholdPassives } = aggregateEquipmentPassives(equippedItems);
   const mergedBaseStats = sumStats(monster.stats, equipmentStats);
 
   const hp = Math.round(mergedBaseStats.hp * (1 + passiveBonuses.statPct.hp / 100));
@@ -2877,6 +2997,7 @@ export function getMonsterRaidProfile(
     statusResistPct: passiveBonuses.statusResistPct,
     criticalRate: 5 + passiveBonuses.criticalRate,
     criticalDamage: 150 + passiveBonuses.criticalDamage,
+    thresholdPassives,
   };
 }
 
@@ -2943,7 +3064,7 @@ export function simulateRaidBattle(
   const today = toLocalDateKey(date);
   const monsterProfile = getMonsterRaidProfile(monster, inventory, equippedSlots);
   const equippedItems = getEquippedItems(inventory, equippedSlots);
-  const monsterState = createMonsterBattleState(monsterProfile);
+  const monsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives);
   const bossState = createBossBattleState(boss);
   const log: RaidBattleLogEntry[] = [];
   let turn = 1;
@@ -3025,7 +3146,7 @@ export function initializeBattleState(
   battleLog: RaidBattleLogEntry[];
 } {
   const monsterProfile = getMonsterRaidProfile(monster, inventory, equippedSlots);
-  const monsterState = createMonsterBattleState(monsterProfile);
+  const monsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives);
   const bossState = createBossBattleState(boss);
   const battleLog: RaidBattleLogEntry[] = [];
 
@@ -3073,6 +3194,7 @@ export function getAvailableActions(
       stackable: skill.stackable,
       reflectPct: skill.reflectPct,
       reflectMultiplier: skill.reflectMultiplier,
+      description: skill.description,
     });
   }
 
