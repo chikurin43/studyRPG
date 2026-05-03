@@ -12,6 +12,7 @@ import {
   getRarityLabel,
   getStatusLabel,
   toLocalDateKey,
+  getTagColor,
 } from "@/lib/gameRules";
 import type {
   CombatStatusState,
@@ -23,6 +24,22 @@ import type {
 } from "@/types/game";
 import type { BattleAction } from "@/lib/gameRules";
 import { useGameStore } from "@/store/gameStore";
+
+function TagPill({ tag }: { tag: string }) {
+  const color = getTagColor(tag);
+  return (
+    <span
+      className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium"
+      style={{
+        backgroundColor: color.bg,
+        color: color.text,
+        borderColor: color.bg.replace(/[\d.]+\)/, "0.24)"),
+      }}
+    >
+      {tag}
+    </span>
+  );
+}
 
 export function RaidView() {
   const raid = useGameStore((state) => state.raid);
@@ -112,8 +129,8 @@ export function RaidView() {
                 </div>
               ) : null}
 
-              <div className="mt-5 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Boss Skills</p>
+              <div className="mt-5 space-y-3 max-h-100 overflow-y-auto">
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)] sticky top-0 bg-[var(--bg-panel-strong)] py-2">Boss Skills</p>
                 {raid.boss.activeSkills.map((skill, index) => (
                   <div key={`${skill.id}-active`} className="rounded-[18px] bg-stone-950/5 p-4">
                     <div className="flex flex-wrap items-center gap-2">
@@ -173,6 +190,43 @@ export function RaidView() {
                   </div>
                 </div>
               ) : null}
+
+              <div className="mt-5 space-y-3 max-h-100 overflow-y-auto">
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)] sticky top-0 bg-[var(--bg-panel-strong)] py-2">Monster Skills</p>
+                {equippedSkills.map((item) => (
+                  <div key={item.id} className="rounded-[18px] bg-stone-950/5 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium text-[var(--ink-strong)]">{item.activeSkill.name}</p>
+                      <Badge tone="sky">{item.slot}</Badge>
+                      <Badge tone="ember">MP {item.activeSkill.mpCost}</Badge>
+                      <Badge tone="moss">Active</Badge>
+                    </div>
+                    {/* Active Skill Tags */}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {item.activeSkill.tags.map((tag) => (
+                        <TagPill key={`active-${tag}`} tag={tag} />
+                      ))}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
+                  </div>
+                ))}
+                {equippedSkills.map((item) => (
+                  <div key={`${item.id}-passive`} className="rounded-[18px] bg-stone-950/5 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium text-[var(--ink-strong)]">{item.passiveSkill.name}</p>
+                      <Badge tone="sky">{item.slot}</Badge>
+                      <Badge tone="moss">Passive</Badge>
+                    </div>
+                    {/* Passive Skill Tags */}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {item.passiveSkill.tags.map((tag) => (
+                        <TagPill key={`passive-${tag}`} tag={tag} />
+                      ))}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -193,7 +247,8 @@ export function RaidView() {
             </div>
           </div>
 
-          <div className="mt-5 space-y-3">
+          <div className="mt-5 space-y-3 max-h-120 overflow-y-auto">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)] sticky top-0 p-2">Battle Log</p>
             {raid.battleLog.toReversed().map((entry, index) => (
               <article
                 key={`${entry.turn}-${index}-${entry.text}`}
@@ -279,6 +334,30 @@ export function RaidView() {
                   ? "ターンごとにスキルを選択して戦闘を行います。MP と相性を見て適切なスキルを選んでください。"
                   : raidAvailability.reason}
               </div>
+
+              <div className="mt-5 space-y-3 max-h-100 overflow-y-auto">
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)] sticky top-0 bg-[var(--bg-panel-strong)] py-2">Boss Skills</p>
+                {raid.boss.activeSkills.map((skill, index) => (
+                  <div key={`${skill.id}-active`} className="rounded-[18px] bg-stone-950/5 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium text-[var(--ink-strong)]">{skill.name}</p>
+                      <Badge tone="ember">MP {skill.mpCost}</Badge>
+                      <Badge tone="sky">{getElementLabel(skill.element)}</Badge>
+                      <Badge>Active</Badge>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{skill.description}</p>
+                  </div>
+                ))}
+                {raid.boss.passiveSkills.map((skill, index) => (
+                  <div key={`${skill.id}-passive`} className="rounded-[18px] bg-stone-950/5 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium text-[var(--ink-strong)]">{skill.name}</p>
+                      <Badge tone="moss">Passive</Badge>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{skill.description}</p>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="grid gap-4">
@@ -314,8 +393,8 @@ export function RaidView() {
               </div>
 
               <div className="rounded-[24px] border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Equipped Skills</p>
-                <div className="mt-4 space-y-3">
+                <div className="mt-4 space-y-3 max-h-100 overflow-y-auto">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)] sticky top-0 bg-[var(--bg-panel-strong)] py-2">Equipped Skills</p>
                   {equippedSkills.map((item) => (
                     <div key={item.id} className="rounded-[18px] bg-stone-950/5 p-4">
                       <div className="flex flex-wrap items-center gap-2">
@@ -323,6 +402,12 @@ export function RaidView() {
                         <Badge tone="sky">{item.slot}</Badge>
                         <Badge tone="ember">MP {item.activeSkill.mpCost}</Badge>
                         <Badge tone="moss">Active</Badge>
+                      </div>
+                      {/* Active Skill Tags */}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {item.activeSkill.tags.map((tag) => (
+                          <TagPill key={`active-${tag}`} tag={tag} />
+                        ))}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
                     </div>
@@ -333,6 +418,12 @@ export function RaidView() {
                         <p className="font-medium text-[var(--ink-strong)]">{item.passiveSkill.name}</p>
                         <Badge tone="sky">{item.slot}</Badge>
                         <Badge tone="moss">Passive</Badge>
+                      </div>
+                      {/* Passive Skill Tags */}
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {item.passiveSkill.tags.map((tag) => (
+                          <TagPill key={`passive-${tag}`} tag={tag} />
+                        ))}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
                     </div>
@@ -400,7 +491,8 @@ export function RaidView() {
                 ) : null}
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-3 max-h-120 overflow-y-auto">
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)] sticky top-0 p-2">Battle Log</p>
                 {raid.lastBattle.log.toReversed().map((entry, index) => (
                   <article
                     key={`${entry.turn}-${index}-${entry.text}`}

@@ -1,4 +1,4 @@
-export type ViewId = "tasks" | "monster" | "raid";
+export type ViewId = "tasks" | "monster" | "raid" | "settings";
 export type TaskStatus = "idle" | "running" | "completed";
 export type StatKey = "hp" | "mp" | "attack" | "defense" | "speed";
 export type Element = "physical" | "fire" | "ice" | "lightning";
@@ -6,7 +6,7 @@ export type StatusEffectType = "burn" | "shock" | "frostbite" | "stun" | "slow" 
 export type EquipmentSlot = "weapon" | "armor" | "relic";
 export type EquipmentRarity = "C" | "B" | "A" | "S" | "SS" | "SSS";
 
-export type SkillTemplate = "attack" | "buff" | "reward" | "efficiency";
+export type SkillTemplate = "attack" | "buff" | "reward";
 export type SkillTarget = "self" | "nextTask" | "raid" | "passive";
 export type SkillEffectKey =
   | "raidDamagePct"
@@ -15,8 +15,7 @@ export type SkillEffectKey =
   | "speedPct"
   | "taskRewardPct"
   | "expGainPct"
-  | "energyGainPct"
-  | "timerReductionPct";
+  | "energyGainPct";
 export type PerkKey = "taskRewardMultiplier" | "raidDamageMultiplier" | "energyCap";
 
 export interface MonsterStats {
@@ -36,13 +35,23 @@ export interface Task {
   status: TaskStatus;
   createdAt: string;
   completedAt?: string | null;
+  locked?: boolean;
+  folderId?: string | null;
+}
+
+export interface TaskFolder {
+  id: string;
+  name: string;
+  description?: string;
+  color: string;
+  createdAt: string;
+  taskIds: string[];
 }
 
 export interface TimerBonusSnapshot {
   taskRewardPct: number;
   expGainPct: number;
   energyGainPct: number;
-  timerReductionPct: number;
   sourceSkillIds: string[];
 }
 
@@ -51,6 +60,9 @@ export interface ActiveTimer {
   startedAt: string | null;
   targetEndsAt: string | null;
   bonusSnapshot: TimerBonusSnapshot | null;
+  isPaused: boolean;
+  pausedAt: string | null;
+  totalPausedDuration: number; // Total paused time in milliseconds
 }
 
 export interface MonsterSkill {
@@ -240,6 +252,7 @@ export interface RaidState {
 
 export interface PersistedGameState {
   tasks: Task[];
+  folders: TaskFolder[];
   timer: ActiveTimer;
   monster: Monster;
   resources: Resources;
@@ -258,6 +271,19 @@ export interface CompletionReward {
   energyGainPct: number;
 }
 
+export type TaskCompletionReward = {
+  exp: number;
+  sp: number;
+  energy: number;
+};
+
+export interface CompletionEffectsState {
+  isVisible: boolean;
+  taskTitle: string;
+  reward: TaskCompletionReward | null;
+  monsterLevelUp: boolean;
+}
+
 export interface CombatProfile {
   hp: number;
   mp: number;
@@ -271,6 +297,7 @@ export interface CombatProfile {
   criticalRate: number;
   criticalDamage: number;
   thresholdPassives: EquipmentPassiveSkill[];
+  conditionPassives: EquipmentPassiveSkill[];
 }
 
 export interface SimulatedRaidBattle {

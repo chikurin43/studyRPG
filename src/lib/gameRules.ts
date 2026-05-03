@@ -59,6 +59,7 @@ export type CombatantState = {
   criticalRate: number;
   criticalDamage: number;
   thresholdPassives: EquipmentPassiveSkill[];
+  conditionPassives: EquipmentPassiveSkill[];
 };
 
 type SkillBlueprint = {
@@ -76,7 +77,6 @@ type ModifierBucket = {
   taskRewardPct: number;
   expGainPct: number;
   energyGainPct: number;
-  timerReductionPct: number;
 };
 
 type EquipmentPassiveBonuses = {
@@ -111,8 +111,8 @@ export type BattleAction = {
 
 const ELEMENTS: Element[] = ["physical", "fire", "ice", "lightning"];
 const STATUS_TYPES: StatusEffectType[] = ["burn", "shock", "frostbite", "stun", "slow", "defenseDown", "darkness", "seal", "bleed"];
-const EQUIPMENT_SLOTS: EquipmentSlot[] = ["weapon", "armor", "relic"];
-const RARITIES: EquipmentRarity[] = ["C", "B", "A", "S", "SS", "SSS"];
+export const EQUIPMENT_SLOTS: EquipmentSlot[] = ["weapon", "armor", "relic"];
+export const RARITIES: EquipmentRarity[] = ["C", "B", "A", "S", "SS", "SSS"];
 
 const ELEMENT_LABELS: Record<Element, string> = {
   physical: "物理",
@@ -178,7 +178,6 @@ const EMPTY_MODIFIERS: ModifierBucket = {
   taskRewardPct: 0,
   expGainPct: 0,
   energyGainPct: 0,
-  timerReductionPct: 0,
 };
 
 const EMPTY_STATS: MonsterStats = {
@@ -486,18 +485,6 @@ const SKILL_BLUEPRINTS: SkillBlueprint[] = [
     effectKey: "energyGainPct",
     createText: (valuePct) => `次のタスクのEnergy+${valuePct}%`,
   },
-  {
-    template: "efficiency",
-    target: "passive",
-    effectKey: "timerReductionPct",
-    createText: (valuePct) => `常時タスクタイマー-${valuePct}%`,
-  },
-  {
-    template: "efficiency",
-    target: "nextTask",
-    effectKey: "timerReductionPct",
-    createText: (valuePct) => `次のタスクの時間効率+${valuePct}%`,
-  },
 ];
 
 function createId(prefix: string) {
@@ -721,7 +708,7 @@ function getPassiveTaskModifiers(monster: Monster) {
   const passiveSkills = monster.skills.filter(
     (skill) =>
       skill.target === "passive" &&
-      (skill.template === "reward" || skill.template === "efficiency"),
+      skill.template === "reward",
   );
   const modifiers = toModifierBucket(passiveSkills);
   modifiers.taskRewardPct += monster.perks.taskRewardMultiplier * 10;
@@ -1345,7 +1332,7 @@ const ACTIVE_SKILL_GENERATORS: ActiveSkillGenerator[] = [
       mpCost: calcMP("low", rar, rng),
       element: at,
       powerPct: d,
-      statusEffect: null,
+      statusEffect: { type: st, durationTurns: t, potencyPct: stack },
       guardEffect: null,
       tags: [ELEMENT_LABELS[at], STATUS_LABELS[st], "スタック"],
       durationTurns: t,
@@ -1703,8 +1690,9 @@ function createEquipmentName(slot: EquipmentSlot, rarity: EquipmentRarity, activ
   return `${RARITY_LABELS[rarity]} ${prefix} ${slotWord}`;
 }
 
-function aggregateEquipmentPassives(items: Equipment[]): { bonuses: EquipmentPassiveBonuses; thresholdPassives: EquipmentPassiveSkill[] } {
+function aggregateEquipmentPassives(items: Equipment[]): { bonuses: EquipmentPassiveBonuses; thresholdPassives: EquipmentPassiveSkill[]; conditionPassives: EquipmentPassiveSkill[] } {
   const thresholdPassives: EquipmentPassiveSkill[] = [];
+  const conditionPassives: EquipmentPassiveSkill[] = [];
   
   const bonuses = items.reduce<EquipmentPassiveBonuses>((accumulator, item) => {
     const passive = item.passiveSkill;
@@ -1712,6 +1700,12 @@ function aggregateEquipmentPassives(items: Equipment[]): { bonuses: EquipmentPas
     // Skip threshold-based passives - they'll be applied dynamically
     if (passive.threshold !== undefined) {
       thresholdPassives.push(passive);
+      return accumulator;
+    }
+
+    // Skip condition-based passives (like 被ダメ時) - they'll be applied dynamically
+    if (passive.condition && passive.condition !== "常時") {
+      conditionPassives.push(passive);
       return accumulator;
     }
 
@@ -1743,7 +1737,7 @@ function aggregateEquipmentPassives(items: Equipment[]): { bonuses: EquipmentPas
     return accumulator;
   }, clone(EMPTY_PASSIVE_BONUSES));
 
-  return { bonuses, thresholdPassives };
+  return { bonuses, thresholdPassives, conditionPassives };
 }
 
 function aggregateBossPassives(passiveSkills: EquipmentPassiveSkill[]): { bonuses: EquipmentPassiveBonuses; thresholdPassives: EquipmentPassiveSkill[] } {
@@ -1824,6 +1818,7 @@ function applyStatus(
   target: CombatantState,
   status: NonNullable<EquipmentActiveSkill["statusEffect"]>,
   rng: RandomFn,
+  stackable?: boolean,
 ) {
   const resist = clamp(target.statusResistPct[status.type] ?? 0, 0, 85);
   if (rng() * 100 < resist) {
@@ -1833,7 +1828,12 @@ function applyStatus(
   const existing = target.statuses.find((currentStatus) => currentStatus.type === status.type);
   if (existing) {
     existing.durationTurns = Math.max(existing.durationTurns, status.durationTurns);
-    existing.potencyPct = Math.max(existing.potencyPct, status.potencyPct);
+    if (stackable) {
+      // For stackable skills like 蓄積打, add the potency instead of taking max
+      existing.potencyPct = existing.potencyPct + status.potencyPct;
+    } else {
+      existing.potencyPct = Math.max(existing.potencyPct, status.potencyPct);
+    }
   } else {
     target.statuses.push({
       type: status.type,
@@ -1992,6 +1992,7 @@ function calculateDamage(
 
 function tickStatuses(actor: CombatantState, log: RaidBattleLogEntry[], turn: number) {
   let burnedDamage = 0;
+  let bleedDamage = 0;
 
   actor.statuses = actor.statuses
     .map((status) => {
@@ -1999,6 +2000,11 @@ function tickStatuses(actor: CombatantState, log: RaidBattleLogEntry[], turn: nu
         const damage = Math.max(1, Math.round(actor.maxHp * (status.potencyPct / 100)));
         actor.hp = Math.max(0, actor.hp - damage);
         burnedDamage += damage;
+      }
+      if (status.type === "bleed") {
+        const damage = Math.max(1, Math.round(actor.maxHp * (status.potencyPct / 100)));
+        actor.hp = Math.max(0, actor.hp - damage);
+        bleedDamage += damage;
       }
 
       return {
@@ -2013,6 +2019,14 @@ function tickStatuses(actor: CombatantState, log: RaidBattleLogEntry[], turn: nu
       turn,
       actor: "system",
       text: `${actor.name} は炎上で ${burnedDamage} ダメージを受けた。`,
+    });
+  }
+
+  if (bleedDamage > 0) {
+    log.push({
+      turn,
+      actor: "system",
+      text: `${actor.name} は出血で ${bleedDamage} ダメージを受けた。`,
     });
   }
 
@@ -2044,7 +2058,7 @@ function tickStatuses(actor: CombatantState, log: RaidBattleLogEntry[], turn: nu
   }
 }
 
-function createMonsterBattleState(profile: CombatProfile, thresholdPassives: EquipmentPassiveSkill[] = []): CombatantState {
+function createMonsterBattleState(profile: CombatProfile, thresholdPassives: EquipmentPassiveSkill[] = [], conditionPassives: EquipmentPassiveSkill[] = []): CombatantState {
   return {
     actor: "monster",
     name: "Monster",
@@ -2075,6 +2089,7 @@ function createMonsterBattleState(profile: CombatProfile, thresholdPassives: Equ
     criticalRate: profile.criticalRate,
     criticalDamage: profile.criticalDamage,
     thresholdPassives,
+    conditionPassives,
   };
 }
 
@@ -2124,6 +2139,7 @@ function createBossBattleState(boss: RaidBoss): CombatantState {
     criticalRate: 0,
     criticalDamage: 150,
     thresholdPassives,
+    conditionPassives: [],
   };
 }
 
@@ -2421,6 +2437,42 @@ function executeAction(
     text: `${attacker.name} の ${action.name}。${defender.name} に ${mainDamage} ダメージ。${triangleText}${criticalText}`.trim(),
   });
 
+  // Handle passive skills that trigger when taking damage (被ダメ時)
+  if (totalDamage > 0 && attacker.hp > 0) {
+    const allPassives = [...defender.thresholdPassives, ...defender.conditionPassives];
+    for (const passive of allPassives) {
+      if (passive.condition === "被ダメ時" && passive.category === "statusResist" && passive.statusType) {
+        // Check if this is 「{属性}の荊棘」
+        if (passive.name.includes("荊棘")) {
+          const probMatch = passive.description.match(/(\d+)%の確率で/);
+          if (probMatch) {
+            let probability = parseInt(probMatch[1], 10);
+            // Double probability if the attack element matches the passive element
+            if (passive.element && action.element === passive.element) {
+              probability *= 2;
+            }
+            if (rng() * 100 < probability) {
+              const statusType = passive.statusType;
+              const durationMatch = passive.description.match(/(\d+)ターン/);
+              const durationTurns = durationMatch ? parseInt(durationMatch[1], 10) : 2;
+              const potencyMatch = passive.description.match(/(\d+)%/);
+              const potencyPct = potencyMatch ? parseInt(potencyMatch[1], 10) : 10;
+              
+              const applied = applyStatus(attacker, { type: statusType, durationTurns, potencyPct }, rng);
+              if (applied) {
+                log.push({
+                  turn,
+                  actor: "system",
+                  text: `${defender.name} の ${passive.name} が発動！${attacker.name} に ${STATUS_LABELS[statusType]} ${durationTurns}ターン。`,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (extraDamage > 0) {
     log.push({
       turn,
@@ -2430,7 +2482,7 @@ function executeAction(
   }
 
   if (action.statusEffect && defender.hp > 0) {
-    const applied = applyStatus(defender, action.statusEffect, rng);
+    const applied = applyStatus(defender, action.statusEffect, rng, action.stackable);
     log.push({
       turn,
       actor: "system",
@@ -2557,6 +2609,9 @@ export function createEmptyTimer(): ActiveTimer {
     startedAt: null,
     targetEndsAt: null,
     bonusSnapshot: null,
+    isPaused: false,
+    pausedAt: null,
+    totalPausedDuration: 0,
   };
 }
 
@@ -2652,6 +2707,7 @@ export function createInitialGameState(): PersistedGameState {
 
   return {
     tasks: [],
+    folders: [],
     timer: createEmptyTimer(),
     monster: createInitialMonster(),
     resources: {
@@ -2682,6 +2738,7 @@ export function normalizePersistedGameState(
 
   return {
     tasks: persistedState?.tasks ?? initialState.tasks,
+    folders: persistedState?.folders ?? initialState.folders,
     timer: {
       ...initialState.timer,
       ...(persistedState?.timer ?? {}),
@@ -2738,7 +2795,6 @@ export function createTimerBonusSnapshot(monster: Monster): TimerBonusSnapshot {
     taskRewardPct: modifiers.taskRewardPct,
     expGainPct: modifiers.expGainPct,
     energyGainPct: modifiers.energyGainPct,
-    timerReductionPct: modifiers.timerReductionPct,
     sourceSkillIds: monster.skills
       .filter((skill) => skill.target === "nextTask")
       .map((skill) => skill.id),
@@ -2746,9 +2802,7 @@ export function createTimerBonusSnapshot(monster: Monster): TimerBonusSnapshot {
 }
 
 export function getTaskDurationMs(task: Task, monster: Monster, snapshot: TimerBonusSnapshot) {
-  const passiveReduction = getPassiveTaskModifiers(monster).timerReductionPct;
-  const totalReduction = clamp(passiveReduction + snapshot.timerReductionPct, 0, 80);
-  return Math.round(task.durationMinutes * 60_000 * (1 - totalReduction / 100));
+  return Math.round(task.durationMinutes * 60_000);
 }
 
 export function calculateTaskCompletionReward(
@@ -2966,11 +3020,20 @@ export function getMonsterRaidProfile(
 ): CombatProfile {
   const raidModifiers = getRaidModifiers(monster);
   const equippedItems = getEquippedItems(inventory, equippedSlots);
-  const equipmentStats = equippedItems.reduce<MonsterStats>(
+  const equipmentStatsRaw = equippedItems.reduce<MonsterStats>(
     (stats, item) => sumStats(stats, item.statBonuses),
     clone(EMPTY_STATS),
   );
-  const { bonuses: passiveBonuses, thresholdPassives } = aggregateEquipmentPassives(equippedItems);
+  // 装備ステータスにレベルスケーリングを適用（レベル × 0.15 + 0.35）
+  const levelScaling = monster.level * 0.15 + 0.35;
+  const equipmentStats: MonsterStats = {
+    hp: Math.round(equipmentStatsRaw.hp * levelScaling),
+    mp: Math.round(equipmentStatsRaw.mp * levelScaling),
+    attack: Math.round(equipmentStatsRaw.attack * levelScaling),
+    defense: Math.round(equipmentStatsRaw.defense * levelScaling),
+    speed: Math.round(equipmentStatsRaw.speed * levelScaling),
+  };
+  const { bonuses: passiveBonuses, thresholdPassives, conditionPassives } = aggregateEquipmentPassives(equippedItems);
   const mergedBaseStats = sumStats(monster.stats, equipmentStats);
 
   const hp = Math.round(mergedBaseStats.hp * (1 + passiveBonuses.statPct.hp / 100));
@@ -2998,6 +3061,21 @@ export function getMonsterRaidProfile(
     criticalRate: 5 + passiveBonuses.criticalRate,
     criticalDamage: 150 + passiveBonuses.criticalDamage,
     thresholdPassives,
+    conditionPassives,
+  };
+}
+
+export function getScaledEquipmentStats(
+  equipment: Equipment,
+  monsterLevel: number,
+): MonsterStats {
+  const levelScaling = monsterLevel * 0.15 + 0.35;
+  return {
+    hp: Math.round(equipment.statBonuses.hp * levelScaling),
+    mp: Math.round(equipment.statBonuses.mp * levelScaling),
+    attack: Math.round(equipment.statBonuses.attack * levelScaling),
+    defense: Math.round(equipment.statBonuses.defense * levelScaling),
+    speed: Math.round(equipment.statBonuses.speed * levelScaling),
   };
 }
 
@@ -3064,7 +3142,7 @@ export function simulateRaidBattle(
   const today = toLocalDateKey(date);
   const monsterProfile = getMonsterRaidProfile(monster, inventory, equippedSlots);
   const equippedItems = getEquippedItems(inventory, equippedSlots);
-  const monsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives);
+  const monsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives, monsterProfile.conditionPassives);
   const bossState = createBossBattleState(boss);
   const log: RaidBattleLogEntry[] = [];
   let turn = 1;
@@ -3146,7 +3224,7 @@ export function initializeBattleState(
   battleLog: RaidBattleLogEntry[];
 } {
   const monsterProfile = getMonsterRaidProfile(monster, inventory, equippedSlots);
-  const monsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives);
+  const monsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives, monsterProfile.conditionPassives);
   const bossState = createBossBattleState(boss);
   const battleLog: RaidBattleLogEntry[] = [];
 
@@ -3261,6 +3339,33 @@ export function getRemainingMs(targetEndsAt: string | null, nowMs: number) {
   return Math.max(0, new Date(targetEndsAt).getTime() - nowMs);
 }
 
+export function getRemainingMsForTimer(timer: ActiveTimer, nowMs: number) {
+  if (!timer.targetEndsAt || !timer.startedAt) {
+    return 0;
+  }
+
+  if (timer.isPaused && timer.pausedAt) {
+    // When paused, return the time remaining at the moment of pause
+    const pausedAtTime = new Date(timer.pausedAt).getTime();
+    return Math.max(0, new Date(timer.targetEndsAt).getTime() - pausedAtTime);
+  }
+
+  return getRemainingMs(timer.targetEndsAt, nowMs);
+}
+
+export function isTimerCompleteForTimer(timer: ActiveTimer, nowMs: number) {
+  if (!timer.targetEndsAt) {
+    return false;
+  }
+
+  if (timer.isPaused) {
+    // When paused, timer cannot be complete
+    return false;
+  }
+
+  return new Date(timer.targetEndsAt).getTime() <= nowMs;
+}
+
 export function getSkillRarityFromSignature(generatorSignature: string): EquipmentRarity | null {
   const parts = generatorSignature.split(":");
   if (parts.length < 3) {
@@ -3271,4 +3376,268 @@ export function getSkillRarityFromSignature(generatorSignature: string): Equipme
     return rarity as EquipmentRarity;
   }
   return null;
+}
+
+// ════════════════════════════════════════════════════════════
+// ── タグカラーマッピング ──────────────────────────────────
+// ════════════════════════════════════════════════════════════
+
+export const TAG_COLORS: Record<string, { bg: string; text: string }> = {
+  // 属性
+  物理: { bg: "#dbeafe", text: "#1e40af" },
+  炎: { bg: "#ffedd5", text: "#9a3412" },
+  雷: { bg: "#fef9c3", text: "#854d0e" },
+  氷: { bg: "#cffafe", text: "#155e75" },
+  // アクティブタイプ
+  単体攻撃: { bg: "#f3f4f6", text: "#374151" },
+  二連撃: { bg: "#f3f4f6", text: "#374151" },
+  三連撃: { bg: "#f3f4f6", text: "#374151" },
+  継続ダメージ: { bg: "#fee2e2", text: "#991b1b" },
+  "HP吸収": { bg: "#ede9fe", text: "#5b21b6" },
+  カウンター: { bg: "#f3f4f6", text: "#374151" },
+  反射: { bg: "#dcfce7", text: "#166534" },
+  チャージ: { bg: "#fef9c3", text: "#854d0e" },
+  自己強化: { bg: "#fce7f3", text: "#9d174d" },
+  デバフ: { bg: "#fee2e2", text: "#991b1b" },
+  貫通: { bg: "#dbeafe", text: "#1e40af" },
+  防御破壊: { bg: "#dbeafe", text: "#1e40af" },
+  トドメ: { bg: "#ffedd5", text: "#9a3412" },
+  遅延発動: { bg: "#fef9c3", text: "#854d0e" },
+  封印: { bg: "#ede9fe", text: "#5b21b6" },
+  複合: { bg: "#f3f4f6", text: "#374151" },
+  バフ: { bg: "#fce7f3", text: "#9d174d" },
+  強化: { bg: "#fce7f3", text: "#9d174d" },
+  リジェネ: { bg: "#dcfce7", text: "#166534" },
+  回復: { bg: "#dcfce7", text: "#166534" },
+  浄化: { bg: "#dcfce7", text: "#166534" },
+  状態解除: { bg: "#dcfce7", text: "#166534" },
+  条件付き: { bg: "#f3f4f6", text: "#374151" },
+  スロウ: { bg: "#f3f4f6", text: "#374151" },
+  バリア破壊: { bg: "#dbeafe", text: "#1e40af" },
+  超強化: { bg: "#fce7f3", text: "#9d174d" },
+  スタック: { bg: "#f3f4f6", text: "#374151" },
+  // パッシブ条件
+  常時: { bg: "#f3f4f6", text: "#374151" },
+  攻撃強化: { bg: "#ffedd5", text: "#9a3412" },
+  防御強化: { bg: "#dbeafe", text: "#1e40af" },
+  耐性: { bg: "#cffafe", text: "#155e75" },
+  速度強化: { bg: "#ccfbf1", text: "#115e59" },
+  クリティカル: { bg: "#fef9c3", text: "#854d0e" },
+  "HP閾値": { bg: "#fee2e2", text: "#991b1b" },
+  バリア: { bg: "#dbeafe", text: "#1e40af" },
+  被ダメ時: { bg: "#fee2e2", text: "#991b1b" },
+  状態異常時: { bg: "#ede9fe", text: "#5b21b6" },
+  自身状態異常時: { bg: "#ede9fe", text: "#5b21b6" },
+  相手状態異常時: { bg: "#ffedd5", text: "#9a3412" },
+  ターン開始: { bg: "#dcfce7", text: "#166534" },
+  命中時: { bg: "#fef9c3", text: "#854d0e" },
+  複合条件: { bg: "#fce7f3", text: "#9d174d" },
+  // 状態異常
+  出血: { bg: "#fee2e2", text: "#991b1b" },
+  炎上: { bg: "#ffedd5", text: "#9a3412" },
+  感電: { bg: "#fef9c3", text: "#854d0e" },
+  凍傷: { bg: "#cffafe", text: "#155e75" },
+  スタン: { bg: "#f3f4f6", text: "#374151" },
+  防御ダウン: { bg: "#dbeafe", text: "#1e40af" },
+  暗闇: { bg: "#ede9fe", text: "#5b21b6" },
+  // スロット
+  武器: { bg: "#ffedd5", text: "#9a3412" },
+  防具: { bg: "#dbeafe", text: "#1e40af" },
+  遺物: { bg: "#ede9fe", text: "#5b21b6" },
+  // レア度
+  SSS: { bg: "#ffedd5", text: "#9a3412" },
+  SS: { bg: "#ede9fe", text: "#5b21b6" },
+  S: { bg: "#fef9c3", text: "#854d0e" },
+  A: { bg: "#dbeafe", text: "#1e40af" },
+  B: { bg: "#dcfce7", text: "#166534" },
+  C: { bg: "#f3f4f6", text: "#374151" },
+};
+
+export function getTagColor(tag: string): { bg: string; text: string } {
+  return TAG_COLORS[tag] ?? { bg: "#f3f4f6", text: "#374151" };
+}
+
+// タグカテゴリ分け
+export type TagCategory = "属性" | "アクティブタイプ" | "パッシブ条件" | "状態異常";
+
+const TAG_CATEGORIES: Record<string, TagCategory> = {
+  // 属性
+  物理: "属性",
+  炎: "属性",
+  雷: "属性",
+  氷: "属性",
+  // アクティブタイプ
+  単体攻撃: "アクティブタイプ",
+  二連撃: "アクティブタイプ",
+  三連撃: "アクティブタイプ",
+  継続ダメージ: "アクティブタイプ",
+  "HP吸収": "アクティブタイプ",
+  カウンター: "アクティブタイプ",
+  反射: "アクティブタイプ",
+  チャージ: "アクティブタイプ",
+  自己強化: "アクティブタイプ",
+  デバフ: "アクティブタイプ",
+  貫通: "アクティブタイプ",
+  防御破壊: "アクティブタイプ",
+  トドメ: "アクティブタイプ",
+  遅延発動: "アクティブタイプ",
+  封印: "アクティブタイプ",
+  複合: "アクティブタイプ",
+  バフ: "アクティブタイプ",
+  強化: "アクティブタイプ",
+  リジェネ: "アクティブタイプ",
+  回復: "アクティブタイプ",
+  浄化: "アクティブタイプ",
+  状態解除: "アクティブタイプ",
+  条件付き: "アクティブタイプ",
+  スロウ: "アクティブタイプ",
+  バリア破壊: "アクティブタイプ",
+  超強化: "アクティブタイプ",
+  スタック: "アクティブタイプ",
+  // パッシブ条件
+  常時: "パッシブ条件",
+  攻撃強化: "パッシブ条件",
+  防御強化: "パッシブ条件",
+  耐性: "パッシブ条件",
+  速度強化: "パッシブ条件",
+  クリティカル: "パッシブ条件",
+  "HP閾値": "パッシブ条件",
+  バリア: "パッシブ条件",
+  被ダメ時: "パッシブ条件",
+  状態異常時: "パッシブ条件",
+  自身状態異常時: "パッシブ条件",
+  相手状態異常時: "パッシブ条件",
+  ターン開始: "パッシブ条件",
+  命中時: "パッシブ条件",
+  複合条件: "パッシブ条件",
+  // 状態異常
+  出血: "状態異常",
+  炎上: "状態異常",
+  感電: "状態異常",
+  凍傷: "状態異常",
+  スタン: "状態異常",
+  防御ダウン: "状態異常",
+  暗闇: "状態異常",
+};
+
+export function getTagCategory(tag: string): TagCategory {
+  return TAG_CATEGORIES[tag] ?? "アクティブタイプ";
+}
+
+export function groupTagsByCategory(tags: string[]): Record<TagCategory, string[]> {
+  const grouped: Record<TagCategory, string[]> = {
+    属性: [],
+    アクティブタイプ: [],
+    パッシブ条件: [],
+    状態異常: [],
+  };
+
+  for (const tag of tags) {
+    const category = getTagCategory(tag);
+    grouped[category].push(tag);
+  }
+
+  // 各カテゴリ内でソート
+  for (const category in grouped) {
+    grouped[category as TagCategory].sort();
+  }
+
+  return grouped;
+}
+
+// ════════════════════════════════════════════════════════════
+// ── 装備フィルタ・ソート ──────────────────────────────────
+// ════════════════════════════════════════════════════════════
+
+export type EquipmentSortKey =
+  | "dropStageDesc"
+  | "rarityDesc"
+  | "rarityAsc"
+  | "attackDesc"
+  | "defenseDesc"
+  | "hpDesc"
+  | "mpDesc"
+  | "speedDesc"
+  | "mpCostAsc"
+  | "powerDesc";
+
+export interface EquipmentFilterOptions {
+  selectedTags: string[];
+  selectedRarities: EquipmentRarity[];
+  selectedSlots: EquipmentSlot[];
+}
+
+export function getAllEquipmentTags(equipmentList: Equipment[]): string[] {
+  const tagSet = new Set<string>();
+  for (const eq of equipmentList) {
+    eq.activeSkill.tags.forEach((t) => tagSet.add(t));
+    eq.passiveSkill.tags.forEach((t) => tagSet.add(t));
+  }
+  return Array.from(tagSet).sort();
+}
+
+export function filterEquipment(
+  equipmentList: Equipment[],
+  filters: EquipmentFilterOptions,
+): Equipment[] {
+  return equipmentList.filter((eq) => {
+    // スロットフィルター
+    if (filters.selectedSlots.length > 0 && !filters.selectedSlots.includes(eq.slot)) {
+      return false;
+    }
+    // レア度フィルター
+    if (filters.selectedRarities.length > 0 && !filters.selectedRarities.includes(eq.rarity)) {
+      return false;
+    }
+    // タグフィルター（OR検索：いずれかのタグが含まれればOK）
+    if (filters.selectedTags.length > 0) {
+      const allTags = [...eq.activeSkill.tags, ...eq.passiveSkill.tags];
+      const hasAnyTag = filters.selectedTags.some((tag) => allTags.includes(tag));
+      if (!hasAnyTag) return false;
+    }
+    return true;
+  });
+}
+
+export function sortEquipment(
+  equipmentList: Equipment[],
+  sortKey: EquipmentSortKey,
+  monsterLevel: number,
+): Equipment[] {
+  const sorted = [...equipmentList];
+  const rarityValue: Record<EquipmentRarity, number> = { C: 1, B: 2, A: 3, S: 4, SS: 5, SSS: 6 };
+
+  switch (sortKey) {
+    case "dropStageDesc":
+      sorted.sort((a, b) => b.dropStage - a.dropStage);
+      break;
+    case "rarityDesc":
+      sorted.sort((a, b) => rarityValue[b.rarity] - rarityValue[a.rarity]);
+      break;
+    case "rarityAsc":
+      sorted.sort((a, b) => rarityValue[a.rarity] - rarityValue[b.rarity]);
+      break;
+    case "attackDesc":
+      sorted.sort((a, b) => getScaledEquipmentStats(b, monsterLevel).attack - getScaledEquipmentStats(a, monsterLevel).attack);
+      break;
+    case "defenseDesc":
+      sorted.sort((a, b) => getScaledEquipmentStats(b, monsterLevel).defense - getScaledEquipmentStats(a, monsterLevel).defense);
+      break;
+    case "hpDesc":
+      sorted.sort((a, b) => getScaledEquipmentStats(b, monsterLevel).hp - getScaledEquipmentStats(a, monsterLevel).hp);
+      break;
+    case "mpDesc":
+      sorted.sort((a, b) => getScaledEquipmentStats(b, monsterLevel).mp - getScaledEquipmentStats(a, monsterLevel).mp);
+      break;
+    case "speedDesc":
+      sorted.sort((a, b) => getScaledEquipmentStats(b, monsterLevel).speed - getScaledEquipmentStats(a, monsterLevel).speed);
+      break;
+    case "mpCostAsc":
+      sorted.sort((a, b) => a.activeSkill.mpCost - b.activeSkill.mpCost);
+      break;
+    case "powerDesc":
+      sorted.sort((a, b) => (b.activeSkill.powerPct ?? 0) - (a.activeSkill.powerPct ?? 0));
+      break;
+  }
+  return sorted;
 }

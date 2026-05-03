@@ -32,9 +32,11 @@ import {
   toLocalDateKey,
 } from "@/lib/gameRules";
 import type {
+  CompletionEffectsState,
   Equipment,
   PersistedGameState,
   Task,
+  TaskCompletionReward,
   TimerBonusSnapshot,
   ViewId,
 } from "@/types/game";
@@ -49,6 +51,7 @@ type StoreDependencies = {
 type UIState = {
   activeView: ViewId;
   lastActionMessage: string | null;
+  completionEffects: CompletionEffectsState;
 };
 
 type Actions = {
@@ -59,9 +62,28 @@ type Actions = {
     subject?: string;
     durationMinutes: number;
     difficulty: number;
+    folderId?: string | null;
   }) => void;
+  updateTask: (taskId: string, updates: {
+    title?: string;
+    subject?: string;
+    durationMinutes?: number;
+    difficulty?: number;
+    folderId?: string | null;
+  }) => void;
+  reorderTasks: (fromIndex: number, toIndex: number) => void;
+  createFolder: (input: { name: string; description?: string; color: string }) => void;
+  updateFolder: (folderId: string, updates: { name?: string; description?: string; color?: string }) => void;
+  deleteFolder: (folderId: string) => void;
+  assignTaskToFolder: (taskId: string, folderId: string | null) => void;
   deleteTask: (taskId: string) => void;
+  batchDeleteTasks: (taskIds: string[]) => void;
+  toggleTaskLock: (taskId: string) => void;
+  reverseFolderTasks: (folderId: string | null) => void;
+  batchMoveTasks: (taskIds: string[], folderId: string | null) => void;
   startTaskTimer: (taskId: string) => void;
+  pauseTaskTimer: () => void;
+  resumeTaskTimer: () => void;
   stopTaskTimer: () => void;
   completeTask: (taskId: string) => void;
   claimLevelChoice: (choiceId: string) => void;
@@ -73,6 +95,8 @@ type Actions = {
   executePlayerAction: (action: BattleAction) => void;
   endBattle: () => void;
   resetGame: () => void;
+  showCompletionEffects: (taskTitle: string, reward: TaskCompletionReward, monsterLevelUp: boolean) => void;
+  hideCompletionEffects: () => void;
 };
 
 export type GameStoreState = PersistedGameState & UIState & Actions;
@@ -90,6 +114,7 @@ function createTaskMessage(task: Task) {
 function getPersistedSlice(state: GameStoreState): PersistedGameState {
   return {
     tasks: state.tasks,
+    folders: state.folders,
     timer: state.timer,
     monster: state.monster,
     resources: state.resources,
@@ -136,6 +161,12 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
         ...createInitialGameState(),
         activeView: "tasks",
         lastActionMessage: "勉強タスクを登録して、最初の育成ループを始めましょう。",
+        completionEffects: {
+          isVisible: false,
+          taskTitle: "",
+          reward: null,
+          monsterLevelUp: false,
+        },
 
         setActiveView: (view) => set({ activeView: view }),
 
@@ -152,11 +183,205 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               status: "idle",
               createdAt: now().toISOString(),
               completedAt: null,
+              folderId: input.folderId || null,
             };
+
+            // Update folder taskIds if folderId is provided
+            let updatedFolders = state.folders;
+            if (input.folderId) {
+              updatedFolders = state.folders.map((folder) => {
+                if (folder.id === input.folderId) {
+                  return {
+                    ...folder,
+                    taskIds: [...folder.taskIds, task.id],
+                  };
+                }
+                return folder;
+              });
+            }
 
             return {
               tasks: [task, ...state.tasks],
+              folders: updatedFolders,
               lastActionMessage: createTaskMessage(task),
+            };
+          }),
+
+        updateTask: (taskId, updates) =>
+          set((state) => {
+            const taskIndex = state.tasks.findIndex((task) => task.id === taskId);
+            if (taskIndex === -1) {
+              return {
+                lastActionMessage: "タスクが見つかりません。",
+              };
+            }
+
+            const task = state.tasks[taskIndex];
+            if (task.status === "completed") {
+              return {
+                lastActionMessage: "完了済みタスクは編集できません。",
+              };
+            }
+
+            if (state.timer.activeTaskId === taskId) {
+              return {
+                lastActionMessage: "進行中のタイマーがあるタスクは編集できません。",
+              };
+            }
+
+            const updatedTask: Task = {
+              ...task,
+              title: updates.title?.trim() !== undefined ? updates.title.trim() : task.title,
+              subject: updates.subject !== undefined ? (updates.subject?.trim() || undefined) : task.subject,
+              durationMinutes: updates.durationMinutes !== undefined ? updates.durationMinutes : task.durationMinutes,
+              difficulty: updates.difficulty !== undefined ? updates.difficulty : task.difficulty,
+              folderId: updates.folderId !== undefined ? updates.folderId : task.folderId,
+            };
+
+            const updatedTasks = [...state.tasks];
+            updatedTasks[taskIndex] = updatedTask;
+
+            // Update folder taskIds
+            const updatedFolders = state.folders.map((folder) => {
+              // If task moved to this folder
+              if (updates.folderId === folder.id && task.folderId !== folder.id) {
+                return {
+                  ...folder,
+                  taskIds: [...folder.taskIds, taskId],
+                };
+              }
+              // If task moved from this folder
+              if (task.folderId === folder.id && updates.folderId !== folder.id) {
+                return {
+                  ...folder,
+                  taskIds: folder.taskIds.filter((id) => id !== taskId),
+                };
+              }
+              return folder;
+            });
+
+            return {
+              tasks: updatedTasks,
+              folders: updatedFolders,
+              lastActionMessage: `「${updatedTask.title}」を更新しました。`,
+            };
+          }),
+
+        reorderTasks: (fromIndex, toIndex) =>
+          set((state) => {
+            const newTasks = [...state.tasks];
+            const [movedTask] = newTasks.splice(fromIndex, 1);
+            newTasks.splice(toIndex, 0, movedTask);
+
+            return {
+              tasks: newTasks,
+              lastActionMessage: "タスクの順序を変更しました。",
+            };
+          }),
+
+        createFolder: (input) =>
+          set((state) => {
+            const folder = {
+              id: `folder-${crypto.randomUUID()}`,
+              name: input.name.trim(),
+              description: input.description?.trim() || undefined,
+              color: input.color,
+              createdAt: now().toISOString(),
+              taskIds: [],
+            };
+
+            return {
+              folders: [...state.folders, folder],
+              lastActionMessage: `フォルダ「${folder.name}」を作成しました。`,
+            };
+          }),
+
+        updateFolder: (folderId, updates) =>
+          set((state) => {
+            const folderIndex = state.folders.findIndex((folder) => folder.id === folderId);
+            if (folderIndex === -1) {
+              return {
+                lastActionMessage: "フォルダが見つかりません。",
+              };
+            }
+
+            const folder = state.folders[folderIndex];
+            const updatedFolder = {
+              ...folder,
+              name: updates.name?.trim() !== undefined ? updates.name.trim() : folder.name,
+              description: updates.description !== undefined ? (updates.description?.trim() || undefined) : folder.description,
+              color: updates.color !== undefined ? updates.color : folder.color,
+            };
+
+            const updatedFolders = [...state.folders];
+            updatedFolders[folderIndex] = updatedFolder;
+
+            return {
+              folders: updatedFolders,
+              lastActionMessage: `フォルダ「${updatedFolder.name}」を更新しました。`,
+            };
+          }),
+
+        deleteFolder: (folderId) =>
+          set((state) => {
+            const folder = state.folders.find((folder) => folder.id === folderId);
+            if (!folder) {
+              return {
+                lastActionMessage: "フォルダが見つかりません。",
+              };
+            }
+
+            // フォルダ内のタスクを未分類に戻す
+            const updatedTasks = state.tasks.map((task) =>
+              task.folderId === folderId ? { ...task, folderId: null } : task
+            );
+
+            return {
+              folders: state.folders.filter((folder) => folder.id !== folderId),
+              tasks: updatedTasks,
+              lastActionMessage: `フォルダ「${folder.name}」を削除しました。`,
+            };
+          }),
+
+        assignTaskToFolder: (taskId, folderId) =>
+          set((state) => {
+            const taskIndex = state.tasks.findIndex((task) => task.id === taskId);
+            if (taskIndex === -1) {
+              return {
+                lastActionMessage: "タスクが見つかりません。",
+              };
+            }
+
+            const task = state.tasks[taskIndex];
+            const updatedTask = { ...task, folderId };
+
+            const updatedTasks = [...state.tasks];
+            updatedTasks[taskIndex] = updatedTask;
+
+            // フォルダのtaskIdsを更新
+            const updatedFolders = state.folders.map((folder) => {
+              if (folder.id === folderId) {
+                return {
+                  ...folder,
+                  taskIds: [...folder.taskIds, taskId],
+                };
+              }
+              // 古いフォルダからtaskIdを削除
+              if (folder.taskIds.includes(taskId)) {
+                return {
+                  ...folder,
+                  taskIds: folder.taskIds.filter((id) => id !== taskId),
+                };
+              }
+              return folder;
+            });
+
+            const folderName = folderId ? state.folders.find((f) => f.id === folderId)?.name : "未分類";
+
+            return {
+              tasks: updatedTasks,
+              folders: updatedFolders,
+              lastActionMessage: `タスク「${task.title}」を${folderName}に移動しました。`,
             };
           }),
 
@@ -168,6 +393,118 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               tasks: state.tasks.filter((task) => task.id !== taskId),
               timer: isActive ? createEmptyTimer() : state.timer,
               lastActionMessage: "タスクを削除しました。",
+            };
+          }),
+
+        batchDeleteTasks: (taskIds) =>
+          set((state) => {
+            const isActiveDeleted = taskIds.includes(state.timer.activeTaskId || "");
+            const updatedTasks = state.tasks.filter((task) => !taskIds.includes(task.id));
+            const deletedCount = state.tasks.length - updatedTasks.length;
+
+            // フォルダのtaskIdsから削除されたタスクを削除
+            const updatedFolders = state.folders.map((folder) => ({
+              ...folder,
+              taskIds: folder.taskIds.filter((id) => !taskIds.includes(id)),
+            }));
+
+            return {
+              tasks: updatedTasks,
+              folders: updatedFolders,
+              timer: isActiveDeleted ? createEmptyTimer() : state.timer,
+              lastActionMessage: `${deletedCount}個のタスクを削除しました。`,
+            };
+          }),
+
+        toggleTaskLock: (taskId) =>
+          set((state) => {
+            return {
+              tasks: state.tasks.map((task) =>
+                task.id === taskId ? { ...task, locked: !task.locked } : task,
+              ),
+              lastActionMessage: "タスクのロック状態を変更しました。",
+            };
+          }),
+
+        reverseFolderTasks: (folderId) =>
+          set((state) => {
+            // 対象フォルダの未完了タスクを取得（完了済みは除外）
+            const folderTaskIds = state.tasks
+              .filter((task) =>
+                task.status !== "completed" &&
+                (folderId === null ? !task.folderId : task.folderId === folderId)
+              )
+              .map((task) => task.id);
+
+            if (folderTaskIds.length <= 1) {
+              return { lastActionMessage: "反転するタスクがありません。" };
+            }
+
+            // 対象外のタスク（他のフォルダまたは完了済み）
+            const otherTasks = state.tasks.filter(
+              (task) => !folderTaskIds.includes(task.id)
+            );
+
+            // 対象タスクを逆順にして新しい配列を構築
+            const reversedFolderTasks = folderTaskIds
+              .map((id) => state.tasks.find((task) => task.id === id)!)
+              .reverse();
+
+            // 順序を維持しながら配置：otherTasksの中でfolderTaskIdsに該当する位置にreversedを挿入
+            const result: typeof state.tasks = [];
+            let reversedIndex = 0;
+
+            for (const task of state.tasks) {
+              if (folderTaskIds.includes(task.id)) {
+                result.push(reversedFolderTasks[reversedIndex++]);
+              } else {
+                result.push(task);
+              }
+            }
+
+            return {
+              tasks: result,
+              lastActionMessage: `${reversedFolderTasks.length}個のタスクの順序を反転しました。`,
+            };
+          }),
+
+        batchMoveTasks: (taskIds, folderId) =>
+          set((state) => {
+            const folderName = folderId
+              ? state.folders.find((f) => f.id === folderId)?.name
+              : "未分類";
+
+            // タスクのfolderIdを更新
+            const updatedTasks = state.tasks.map((task) =>
+              taskIds.includes(task.id) ? { ...task, folderId } : task
+            );
+
+            // フォルダのtaskIdsを更新
+            const updatedFolders = state.folders.map((folder) => {
+              if (folder.id === folderId) {
+                // 移動先フォルダに追加
+                const newTaskIds = [...folder.taskIds];
+                taskIds.forEach((id) => {
+                  if (!newTaskIds.includes(id)) {
+                    newTaskIds.push(id);
+                  }
+                });
+                return { ...folder, taskIds: newTaskIds };
+              }
+              // 他のフォルダからは削除
+              if (folder.taskIds.some((id) => taskIds.includes(id))) {
+                return {
+                  ...folder,
+                  taskIds: folder.taskIds.filter((id) => !taskIds.includes(id)),
+                };
+              }
+              return folder;
+            });
+
+            return {
+              tasks: updatedTasks,
+              folders: updatedFolders,
+              lastActionMessage: `${taskIds.length}個のタスクを${folderName}に移動しました。`,
             };
           }),
 
@@ -204,8 +541,61 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 startedAt: startDate.toISOString(),
                 targetEndsAt,
                 bonusSnapshot: snapshot,
+                isPaused: false,
+                pausedAt: null,
+                totalPausedDuration: 0,
               },
               lastActionMessage: `「${task.title}」のタイマーを開始しました。`,
+            };
+          }),
+
+        pauseTaskTimer: () =>
+          set((state) => {
+            if (!state.timer.activeTaskId || state.timer.isPaused) {
+              return {
+                lastActionMessage: "一時停止できるタイマーがありません。",
+              };
+            }
+
+            return {
+              timer: {
+                ...state.timer,
+                isPaused: true,
+                pausedAt: now().toISOString(),
+              },
+              lastActionMessage: "タイマーを一時停止しました。",
+            };
+          }),
+
+        resumeTaskTimer: () =>
+          set((state) => {
+            if (!state.timer.activeTaskId || !state.timer.isPaused) {
+              return {
+                lastActionMessage: "再開できるタイマーがありません。",
+              };
+            }
+
+            const pausedAt = state.timer.pausedAt;
+            const currentPausedDuration = pausedAt 
+              ? now().getTime() - new Date(pausedAt).getTime()
+              : 0;
+            const newTotalPausedDuration = state.timer.totalPausedDuration + currentPausedDuration;
+
+            // Calculate new target end time by adding the pause duration
+            const originalTargetEndsAt = state.timer.targetEndsAt;
+            const newTargetEndsAt = originalTargetEndsAt
+              ? new Date(new Date(originalTargetEndsAt).getTime() + currentPausedDuration).toISOString()
+              : null;
+
+            return {
+              timer: {
+                ...state.timer,
+                isPaused: false,
+                pausedAt: null,
+                totalPausedDuration: newTotalPausedDuration,
+                targetEndsAt: newTargetEndsAt,
+              },
+              lastActionMessage: "タイマーを再開しました。",
             };
           }),
 
@@ -230,7 +620,9 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
             const snapshot: TimerBonusSnapshot | null =
               state.timer.activeTaskId === taskId ? state.timer.bonusSnapshot : null;
             const reward = calculateTaskCompletionReward(task, state.monster, snapshot);
-            const gainedMonster = grantMonsterExperience(state.monster, reward.exp, random).monster;
+            const monsterResult = grantMonsterExperience(state.monster, reward.exp, random);
+            const gainedMonster = monsterResult.monster;
+            const monsterLevelUp = gainedMonster.level > state.monster.level;
             const nextEnergy = clamp(
               state.resources.energy + reward.energy,
               0,
@@ -238,17 +630,46 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
             );
             const actualEnergyGain = nextEnergy - state.resources.energy;
 
+            const updatedTasks = state.tasks.map((currentTask) =>
+              currentTask.id === taskId
+                ? { ...currentTask, status: "completed" as const, completedAt: now().toISOString() }
+                : currentTask,
+            );
+
+            // If task is locked, create a copy and add it back to pending tasks
+            let finalTasks: Task[] = updatedTasks;
+            if (task.locked) {
+              const newTask: Task = {
+                id: createTaskId(),
+                title: task.title,
+                subject: task.subject,
+                durationMinutes: task.durationMinutes,
+                difficulty: task.difficulty,
+                status: "idle" as const,
+                createdAt: now().toISOString(),
+                completedAt: null,
+                locked: true,
+              };
+              finalTasks = [newTask, ...updatedTasks];
+            }
+
             return {
-              tasks: state.tasks.map((currentTask) =>
-                currentTask.id === taskId
-                  ? { ...currentTask, status: "completed", completedAt: now().toISOString() }
-                  : currentTask,
-              ),
+              tasks: finalTasks,
               timer: state.timer.activeTaskId === taskId ? createEmptyTimer() : state.timer,
               monster: gainedMonster,
               resources: {
                 sp: state.resources.sp + reward.sp,
                 energy: nextEnergy,
+              },
+              completionEffects: {
+                isVisible: true,
+                taskTitle: task.title,
+                reward: {
+                  exp: reward.exp,
+                  sp: reward.sp,
+                  energy: actualEnergyGain,
+                },
+                monsterLevelUp,
               },
               lastActionMessage: `タスク達成: EXP +${reward.exp}, SP +${reward.sp}, Energy +${actualEnergyGain}`,
             };
@@ -682,6 +1103,30 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
             ...createInitialGameState(),
             activeView: "tasks",
             lastActionMessage: "データを初期化しました。新しい周回を始めましょう。",
+            completionEffects: {
+              isVisible: false,
+              taskTitle: "",
+              reward: null,
+              monsterLevelUp: false,
+            },
+          })),
+
+        showCompletionEffects: (taskTitle, reward, monsterLevelUp) =>
+          set(() => ({
+            completionEffects: {
+              isVisible: true,
+              taskTitle,
+              reward,
+              monsterLevelUp,
+            },
+          })),
+
+        hideCompletionEffects: () =>
+          set((state) => ({
+            completionEffects: {
+              ...state.completionEffects,
+              isVisible: false,
+            },
           })),
       }),
       {

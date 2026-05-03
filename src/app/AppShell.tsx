@@ -1,10 +1,12 @@
-import { Sparkles, RotateCcw } from "lucide-react";
+import { Sparkles, Settings } from "lucide-react";
 import { TopNav } from "@/components/layout/TopNav";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { CompletionEffects } from "@/components/ui/CompletionEffects";
 import { TasksView } from "@/features/tasks/TasksView";
 import { MonsterView } from "@/features/monster/MonsterView";
 import { RaidView } from "@/features/raid/RaidView";
+import { SettingsView } from "@/features/settings/SettingsView";
 import { formatNumber } from "@/lib/formatters";
 import { getEnergyCap, getRaidReadyStats } from "@/lib/gameRules";
 import { useGameStore } from "@/store/gameStore";
@@ -14,6 +16,7 @@ const navItems: { id: ViewId; label: string; hint: string }[] = [
   { id: "tasks", label: "Tasks", hint: "勉強を報酬へ変える" },
   { id: "monster", label: "Monster", hint: "成長と3択強化" },
   { id: "raid", label: "Raid", hint: "1日1回のボス挑戦" },
+  { id: "settings", label: "Settings", hint: "セーブの管理" },
 ];
 
 export function AppShell() {
@@ -28,6 +31,8 @@ export function AppShell() {
   const raid = useGameStore((state) => state.raid);
   const equipmentInventory = useGameStore((state) => state.equipmentInventory);
   const equippedSlots = useGameStore((state) => state.equippedSlots);
+  const completionEffects = useGameStore((state) => state.completionEffects);
+  const hideCompletionEffects = useGameStore((state) => state.hideCompletionEffects);
 
   const completedTasks = tasks.filter((task) => task.status === "completed").length;
   const energyCap = getEnergyCap(monster);
@@ -100,10 +105,6 @@ export function AppShell() {
                 メッセージを閉じる
               </Button>
             ) : null}
-            <Button type="button" size="sm" variant="danger" onClick={resetGame}>
-              <RotateCcw className="mr-2 h-4 w-4" />
-              リセット
-            </Button>
           </div>
         </div>
 
@@ -111,8 +112,18 @@ export function AppShell() {
           {activeView === "tasks" ? <TasksView /> : null}
           {activeView === "monster" ? <MonsterView /> : null}
           {activeView === "raid" ? <RaidView /> : null}
+          {activeView === "settings" ? <SettingsView /> : null}
         </main>
       </div>
+      
+      {/* Completion Effects Overlay */}
+      <CompletionEffects
+        isVisible={completionEffects.isVisible}
+        taskTitle={completionEffects.taskTitle}
+        reward={completionEffects.reward}
+        monsterLevelUp={completionEffects.monsterLevelUp}
+        onComplete={hideCompletionEffects}
+      />
     </div>
   );
 }
