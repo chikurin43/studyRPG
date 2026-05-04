@@ -2097,7 +2097,7 @@ function createBossBattleState(boss: RaidBoss): CombatantState {
   const { bonuses: passiveBonuses, thresholdPassives } = aggregateBossPassives(boss.passiveSkills);
   const baseStats = {
     hp: boss.maxHp,
-    mp: 100,
+    mp: 100 + (boss.level - 1) * 15, // Base 100 MP + 15 MP per level
     attack: boss.attack,
     defense: boss.defense,
     speed: boss.speed,
@@ -2566,6 +2566,18 @@ function finishTurn(
       });
     }
   }
+
+  if (actor.actor === "boss" && actor.hp > 0) {
+    const recoveredMp = Math.min(actor.maxMp - actor.mp, getMpRecovery(actor));
+    if (recoveredMp > 0) {
+      actor.mp += recoveredMp;
+      log.push({
+        turn,
+        actor: "system",
+        text: `${actor.name} は MP を ${recoveredMp} 回復した。`,
+      });
+    }
+  }
 }
 
 export function clamp(value: number, min: number, max: number) {
@@ -2680,7 +2692,7 @@ export function createInitialRaidBoss(): RaidBoss {
     defense: 40,
     speed: 50,
     element: getBossElementForStage(1),
-    energyCost: 20,
+    energyCost: 50,
     lastAttemptDate: null,
     activeSkills,
     passiveSkills,

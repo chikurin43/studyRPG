@@ -76,7 +76,7 @@ export function FullscreenTimer({ task, timer, onExit, onPause, onResume, onStop
           <div className="w-full max-w-2xl mx-auto">
             <Meter
               tone={timerDone ? "ember" : "sky"}
-              value={elapsed}
+              value={activeRemainingMs}
               max={totalDuration}
               className="h-4"
             />

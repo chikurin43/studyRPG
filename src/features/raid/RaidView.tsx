@@ -97,12 +97,21 @@ export function RaidView() {
                 <Meter value={raid.bossBattleState?.hp ?? 0} max={raid.boss.maxHp} tone="ember" className="h-4" />
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-4">
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-[var(--ink-strong)]">Boss MP</p>
+                  <p className="text-sm text-[var(--ink-soft)]">
+                    {formatNumber(raid.bossBattleState?.mp ?? 0)} / {formatNumber(raid.bossBattleState?.maxMp ?? 1)}
+                  </p>
+                </div>
+                <Meter value={raid.bossBattleState?.mp ?? 0} max={raid.bossBattleState?.maxMp ?? 1} tone="sky" className="h-4" />
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
                 {([
                   ["ATK", raid.boss.attack],
                   ["DEF", raid.boss.defense],
                   ["SPD", raid.boss.speed],
-                  ["MP", raid.bossBattleState?.mp ?? 0],
                 ] as const).map(([label, value]) => (
                   <div key={label} className="rounded-[18px] bg-stone-950/5 p-4">
                     <p className="text-xs uppercase tracking-[0.2em] text-[var(--ink-soft)]">{label}</p>
@@ -156,18 +165,40 @@ export function RaidView() {
 
             <div className="rounded-[24px] border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-5">
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Monster</p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-5">
+              
+              {/* HP Bar */}
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-[var(--ink-strong)]">Monster HP</p>
+                  <p className="text-sm text-[var(--ink-soft)]">
+                    {formatNumber(raid.monsterBattleState?.hp ?? 0)} / {formatNumber(raid.monsterBattleState?.maxHp ?? 1)}
+                  </p>
+                </div>
+                <Meter value={raid.monsterBattleState?.hp ?? 0} max={raid.monsterBattleState?.maxHp ?? 1} tone="moss" className="h-4" />
+              </div>
+
+              {/* MP Bar */}
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-[var(--ink-strong)]">Monster MP</p>
+                  <p className="text-sm text-[var(--ink-soft)]">
+                    {formatNumber(raid.monsterBattleState?.mp ?? 0)} / {formatNumber(raid.monsterBattleState?.maxMp ?? 1)}
+                  </p>
+                </div>
+                <Meter value={raid.monsterBattleState?.mp ?? 0} max={raid.monsterBattleState?.maxMp ?? 1} tone="sky" className="h-4" />
+              </div>
+
+              {/* Other Stats */}
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 {([
-                  ["HP", raid.monsterBattleState?.hp ?? 0, raid.monsterBattleState?.maxHp ?? 1],
-                  ["MP", raid.monsterBattleState?.mp ?? 0, raid.monsterBattleState?.maxMp ?? 1],
                   ["ATK", raid.monsterBattleState?.attack ?? 0],
                   ["DEF", raid.monsterBattleState?.defense ?? 0],
                   ["SPD", raid.monsterBattleState?.speed ?? 0],
-                ] as const).map(([label, value, max]) => (
+                ] as const).map(([label, value]) => (
                   <div key={label} className="rounded-[18px] bg-stone-950/5 p-4">
                     <p className="text-xs uppercase tracking-[0.2em] text-[var(--ink-soft)]">{label}</p>
                     <p className="mt-2 text-2xl font-semibold text-[var(--ink-strong)]">
-                      {formatNumber(value)}{max !== undefined ? ` / ${formatNumber(max)}` : ''}
+                      {formatNumber(value)}
                     </p>
                   </div>
                 ))}
