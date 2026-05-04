@@ -2740,6 +2740,12 @@ export function createInitialGameState(): PersistedGameState {
     },
     equipmentInventory: starterEquipment.inventory,
     equippedSlots: starterEquipment.equippedSlots,
+    attachmentInventory: [],
+    equippedAttachments: {
+      weapon: [],
+      armor: [],
+      relic: [],
+    },
   };
 }
 
@@ -2788,6 +2794,11 @@ export function normalizePersistedGameState(
     equippedSlots: {
       ...initialState.equippedSlots,
       ...(persistedState?.equippedSlots ?? {}),
+    },
+    attachmentInventory: persistedState?.attachmentInventory ?? initialState.attachmentInventory,
+    equippedAttachments: {
+      ...initialState.equippedAttachments,
+      ...(persistedState?.equippedAttachments ?? {}),
     },
   };
 }
@@ -3652,4 +3663,568 @@ export function sortEquipment(
       break;
   }
   return sorted;
+}
+
+// Synthesis system constants
+const SYNTHESIS_SP_COST_BASE = 100;
+
+export function getSynthesisSPCost(rarity: EquipmentRarity): number {
+  const rarityMultiplier: Record<EquipmentRarity, number> = {
+    C: 1,
+    B: 1.5,
+    A: 2,
+    S: 3,
+    SS: 5,
+    SSS: 8,
+  };
+  return Math.floor(SYNTHESIS_SP_COST_BASE * rarityMultiplier[rarity]);
+}
+
+export function getNextRarity(current: EquipmentRarity): EquipmentRarity {
+  const rarityOrder: EquipmentRarity[] = ["C", "B", "A", "S", "SS", "SSS"];
+  const currentIndex = rarityOrder.indexOf(current);
+  if (currentIndex >= rarityOrder.length - 1) {
+    return "SSS"; // Max rarity
+  }
+  return rarityOrder[currentIndex + 1];
+}
+
+export function canSynthesize(
+  base: Equipment,
+  material: Equipment,
+  availableSP: number,
+): { canSynthesize: boolean; reason?: string } {
+  if (base.id === material.id) {
+    return { canSynthesize: false, reason: "同じ装備を選択しています" };
+  }
+  if (base.slot !== material.slot) {
+    return { canSynthesize: false, reason: "異なるスロットの装備同士は合成できません" };
+  }
+  if (base.rarity !== material.rarity) {
+    return { canSynthesize: false, reason: "異なるレア度の装備同士は合成できません" };
+  }
+  const cost = getSynthesisSPCost(base.rarity);
+  if (availableSP < cost) {
+    return { canSynthesize: false, reason: `SPが不足しています（必要: ${cost}）` };
+  }
+  return { canSynthesize: true };
+}
+
+export function previewSynthesis(
+  base: Equipment,
+  material: Equipment,
+  selection: import("@/types/game").SynthesisSelection,
+  availableSP: number,
+): import("@/types/game").SynthesisPreview {
+  const canResult = canSynthesize(base, material, availableSP);
+  const resultRarity = getNextRarity(base.rarity);
+  const spCost = getSynthesisSPCost(base.rarity);
+
+  // Calculate resulting stats
+  const resultingStats: import("@/types/game").MonsterStats = { ...base.statBonuses };
+  
+  // Override with inherited stats from material (max 2)
+  for (const statKey of selection.inheritedStats.slice(0, 2)) {
+    resultingStats[statKey] = material.statBonuses[statKey];
+  }
+
+  // Determine resulting skills with rank upgrade
+  let resultingActiveSkill = upgradeActiveSkillRank(base.activeSkill, resultRarity);
+  let resultingPassiveSkill = upgradePassiveSkillRank(base.passiveSkill, resultRarity);
+
+  if (selection.inheritedSkill === "active") {
+    resultingActiveSkill = upgradeActiveSkillRank(material.activeSkill, resultRarity);
+  } else if (selection.inheritedSkill === "passive") {
+    resultingPassiveSkill = upgradePassiveSkillRank(material.passiveSkill, resultRarity);
+  }
+
+  return {
+    baseEquipment: base,
+    materialEquipment: material,
+    resultRarity,
+    resultingStats,
+    resultingActiveSkill,
+    resultingPassiveSkill,
+    spCost,
+    canSynthesize: canResult.canSynthesize,
+    reason: canResult.reason,
+  };
+}
+
+export function executeSynthesis(
+  base: Equipment,
+  material: Equipment,
+  selection: import("@/types/game").SynthesisSelection,
+  availableSP: number,
+  rng: () => number,
+): { newEquipment: import("@/types/game").Equipment; spCost: number } | null {
+  const preview = previewSynthesis(base, material, selection, availableSP);
+  
+  if (!preview.canSynthesize) {
+    return null;
+  }
+
+  // Create new equipment with synthesized properties
+  const newEquipment: import("@/types/game").Equipment = {
+    id: createId("equipment"),
+    slot: base.slot,
+    name: generateSynthesizedEquipmentName(base, material, preview.resultRarity),
+    rarity: preview.resultRarity,
+    dropStage: Math.max(base.dropStage, material.dropStage),
+    statBonuses: preview.resultingStats,
+    activeSkill: preview.resultingActiveSkill,
+    passiveSkill: preview.resultingPassiveSkill,
+  };
+
+  return { newEquipment, spCost: preview.spCost };
+}
+
+function upgradeSkillRank(
+  skill: import("@/types/game").EquipmentActiveSkill | import("@/types/game").EquipmentPassiveSkill,
+  newRarity: import("@/types/game").EquipmentRarity
+): import("@/types/game").EquipmentActiveSkill | import("@/types/game").EquipmentPassiveSkill {
+  const currentRarity = getSkillRarityFromSignature(skill.generatorSignature);
+  if (!currentRarity) return skill; // Handle null case
+  
+  const newSkillRarity = getNextRarity(currentRarity);
+  
+  // Only upgrade if the new rarity is higher
+  if (newSkillRarity === currentRarity) {
+    return skill;
+  }
+  
+  const newSignature = skill.generatorSignature.replace(/:[A-Z]+$/, `:${newSkillRarity}`);
+  
+  return {
+    ...skill,
+    generatorSignature: newSignature,
+  };
+}
+
+function upgradeActiveSkillRank(
+  skill: import("@/types/game").EquipmentActiveSkill,
+  newRarity: import("@/types/game").EquipmentRarity
+): import("@/types/game").EquipmentActiveSkill {
+  return upgradeSkillRank(skill, newRarity) as import("@/types/game").EquipmentActiveSkill;
+}
+
+function upgradePassiveSkillRank(
+  skill: import("@/types/game").EquipmentPassiveSkill,
+  newRarity: import("@/types/game").EquipmentRarity
+): import("@/types/game").EquipmentPassiveSkill {
+  return upgradeSkillRank(skill, newRarity) as import("@/types/game").EquipmentPassiveSkill;
+}
+
+function generateSynthesizedEquipmentName(
+  base: Equipment,
+  material: Equipment,
+  resultRarity: import("@/types/game").EquipmentRarity,
+): string {
+  const rarityPrefix: Record<import("@/types/game").EquipmentRarity, string> = {
+    C: "新品",
+    B: "強化",
+    A: "高級",
+    S: "希少",
+    SS: "伝説",
+    SSS: "神話",
+  };
+
+  const baseName = base.name.replace(/^(新品|強化|高級|希少|伝説|神話)/, "");
+  return `${rarityPrefix[resultRarity]}${baseName}`;
+}
+
+// ==================== ATTACHMENT SYSTEM ====================
+
+const ATTACHMENT_NAMES: Record<EquipmentSlot, string[]> = {
+  weapon: ["の破片", "の核", "の結晶", "のエッセンス", "の魂"],
+  armor: ["の甲殻", "の鱗", "の繊維", "の膜", "の鎧"],
+  relic: ["の石", "の符", "の印", "の紋章", "の秘宝"],
+};
+
+const ATTACHMENT_PREFIXES: Record<import("@/types/game").AttachmentRarity, string> = {
+  C: "普通",
+  B: "良質",
+  A: "優良",
+  S: "希少",
+  SS: "伝説",
+  SSS: "神話",
+};
+
+const ATTACHMENT_EFFECT_TEMPLATES: Record<StatKey, string[]> = {
+  hp: ["生命力", "耐久", "活力"],
+  mp: ["精神力", "集中", "気"],
+  attack: ["攻撃", "破壊", "猛攻"],
+  defense: ["防御", "守護", "鉄壁"],
+  speed: ["速度", "俊敏", "疾風"],
+};
+
+const RARITY_EFFECT_COUNTS: Record<import("@/types/game").AttachmentRarity, number> = {
+  C: 1,
+  B: 1,
+  A: 2,
+  S: 2,
+  SS: 3,
+  SSS: 3,
+};
+
+function generateAttachmentEffect(
+  rarity: import("@/types/game").AttachmentRarity,
+  slot: EquipmentSlot,
+  rng: RandomFn,
+): import("@/types/game").AttachmentEffect {
+  const stats: StatKey[] = ["hp", "mp", "attack", "defense", "speed"];
+  const stat = pickOne(stats, rng);
+  const templates = ATTACHMENT_EFFECT_TEMPLATES[stat];
+  const template = pickOne(templates, rng);
+
+  // Roll for effect type (higher rarity = better chance for % boost)
+  const pctBoostChance: Record<import("@/types/game").AttachmentRarity, number> = {
+    C: 0.1,
+    B: 0.2,
+    A: 0.35,
+    S: 0.5,
+    SS: 0.7,
+    SSS: 0.9,
+  };
+
+  const isPercent = rng() < pctBoostChance[rarity];
+
+  if (isPercent) {
+    const pctValues: Record<import("@/types/game").AttachmentRarity, { min: number; max: number }> = {
+      C: { min: 1, max: 3 },
+      B: { min: 2, max: 5 },
+      A: { min: 3, max: 7 },
+      S: { min: 5, max: 10 },
+      SS: { min: 7, max: 12 },
+      SSS: { min: 10, max: 15 },
+    };
+    const range = pctValues[rarity];
+    const value = Math.floor(rng() * (range.max - range.min + 1)) + range.min;
+
+    return {
+      id: createId("att-effect"),
+      type: "statPctBoost",
+      stat,
+      percentValue: value,
+      description: `${template} +${value}%`,
+    };
+  } else {
+    const flatValues: Record<EquipmentSlot, Record<StatKey, { min: number; max: number }>> = {
+      weapon: {
+        hp: { min: 5, max: 15 },
+        mp: { min: 3, max: 10 },
+        attack: { min: 3, max: 8 },
+        defense: { min: 1, max: 4 },
+        speed: { min: 1, max: 3 },
+      },
+      armor: {
+        hp: { min: 10, max: 25 },
+        mp: { min: 5, max: 12 },
+        attack: { min: 1, max: 4 },
+        defense: { min: 3, max: 8 },
+        speed: { min: 1, max: 3 },
+      },
+      relic: {
+        hp: { min: 8, max: 20 },
+        mp: { min: 8, max: 20 },
+        attack: { min: 2, max: 6 },
+        defense: { min: 2, max: 6 },
+        speed: { min: 2, max: 5 },
+      },
+    };
+    const range = flatValues[slot][stat];
+    const value = Math.floor(rng() * (range.max - range.min + 1)) + range.min;
+
+    return {
+      id: createId("att-effect"),
+      type: "statBoost",
+      stat,
+      flatValue: value,
+      description: `${template} +${value}`,
+    };
+  }
+}
+
+function generateConditionalEffect(
+  rarity: import("@/types/game").AttachmentRarity,
+  rng: RandomFn,
+): import("@/types/game").AttachmentEffect | null {
+  // Only A rarity and above can have conditional effects
+  if (rarity === "C" || rarity === "B") return null;
+
+  const chance = rarity === "A" ? 0.3 : rarity === "S" ? 0.5 : rarity === "SS" ? 0.7 : 0.85;
+  if (rng() > chance) return null;
+
+  const conditions = [
+    { threshold: 50, stat: "hp", description: "HP50%以下で" },
+    { threshold: 30, stat: "hp", description: "HP30%以下で" },
+    { threshold: 80, stat: "hp", description: "HP80%以上で" },
+  ];
+  const condition = pickOne(conditions, rng);
+  const stats: StatKey[] = ["attack", "defense", "speed"];
+  const stat = pickOne(stats, rng);
+
+  const boostValues: Record<import("@/types/game").AttachmentRarity, number> = {
+    A: 10,
+    S: 15,
+    SS: 20,
+    SSS: 25,
+    C: 5,
+    B: 8,
+  };
+
+  return {
+    id: createId("att-effect"),
+    type: "conditional",
+    stat,
+    percentValue: boostValues[rarity],
+    condition: condition.description,
+    threshold: condition.threshold,
+    description: `${condition.description}${stat === "attack" ? "攻撃" : stat === "defense" ? "防御" : "速度"} +${boostValues[rarity]}%`,
+  };
+}
+
+export function generateAttachment(
+  stage: number,
+  rng: RandomFn = Math.random,
+  forcedSlot?: EquipmentSlot,
+  forcedRarity?: import("@/types/game").AttachmentRarity,
+): import("@/types/game").Attachment {
+  const rarity = forcedRarity ?? rollRarity(stage, rng);
+  const slot = forcedSlot ?? pickOne(EQUIPMENT_SLOTS, rng);
+  const effectCount = RARITY_EFFECT_COUNTS[rarity];
+
+  const effects: import("@/types/game").AttachmentEffect[] = [];
+
+  // Generate base effects
+  for (let i = 0; i < effectCount; i++) {
+    effects.push(generateAttachmentEffect(rarity, slot, rng));
+  }
+
+  // Possibly add conditional effect for high rarity
+  const conditionalEffect = generateConditionalEffect(rarity, rng);
+  if (conditionalEffect) {
+    effects.push(conditionalEffect);
+  }
+
+  const slotNames = ATTACHMENT_NAMES[slot];
+  const nameSuffix = pickOne(slotNames, rng);
+
+  return {
+    id: createId("attachment"),
+    slot,
+    name: `${ATTACHMENT_PREFIXES[rarity]}${nameSuffix}`,
+    rarity,
+    dropStage: stage,
+    effects,
+  };
+}
+
+export function getAttachmentRarityLabel(rarity: import("@/types/game").AttachmentRarity): string {
+  const labels: Record<import("@/types/game").AttachmentRarity, string> = {
+    C: "C",
+    B: "B",
+    A: "A",
+    S: "S",
+    SS: "SS",
+    SSS: "SSS",
+  };
+  return labels[rarity];
+}
+
+export function getAttachmentSynthesisSPCost(rarity: import("@/types/game").AttachmentRarity): number {
+  const costs: Record<import("@/types/game").AttachmentRarity, number> = {
+    C: 50,
+    B: 100,
+    A: 200,
+    S: 400,
+    SS: 800,
+    SSS: 1600,
+  };
+  return costs[rarity];
+}
+
+function synthesizeAttachmentRarity(
+  baseRarity: import("@/types/game").AttachmentRarity,
+  materialRarity: import("@/types/game").AttachmentRarity,
+  rng: RandomFn,
+): import("@/types/game").AttachmentRarity {
+  const tierMap: Record<import("@/types/game").AttachmentRarity, number> = {
+    C: 0,
+    B: 1,
+    A: 2,
+    S: 3,
+    SS: 4,
+    SSS: 5,
+  };
+
+  const baseTier = tierMap[baseRarity];
+  const materialTier = tierMap[materialRarity];
+
+  // 同レア度の場合、一定確率で1段階アップ
+  if (baseTier === materialTier) {
+    const upgradeChance = 0.3 + baseTier * 0.05; // C=35%, B=40%, A=45%, S=50%, SS=55%
+    if (rng() < upgradeChance && baseTier < 5) {
+      const newTier = baseTier + 1;
+      const tiers: import("@/types/game").AttachmentRarity[] = ["C", "B", "A", "S", "SS", "SSS"];
+      return tiers[newTier];
+    }
+    return baseRarity;
+  }
+
+  // 異なるレア度の場合、高い方を採用（上限はmaterialと同じ）
+  return baseTier >= materialTier ? baseRarity : materialRarity;
+}
+
+export function previewAttachmentSynthesis(
+  base: import("@/types/game").Attachment,
+  material: import("@/types/game").Attachment,
+  rng: RandomFn = Math.random,
+): import("@/types/game").AttachmentSynthesisPreview {
+  // 同じスロットのもののみ合成可能
+  if (base.slot !== material.slot) {
+    return {
+      baseAttachment: base,
+      materialAttachment: material,
+      resultRarity: base.rarity,
+      resultingEffects: base.effects,
+      spCost: getAttachmentSynthesisSPCost(base.rarity),
+      canSynthesize: false,
+      reason: "同じスロットのアタッチメントのみ合成できます",
+    };
+  }
+
+  const resultRarity = synthesizeAttachmentRarity(base.rarity, material.rarity, rng);
+
+  // 結果の効果を決定（ベースと素材の効果からランダムに継承し、不足分は新規生成）
+  const allEffects = [...base.effects, ...material.effects];
+  const targetEffectCount = RARITY_EFFECT_COUNTS[resultRarity];
+
+  // 重複するステータス効果を統合
+  const effectMap = new Map<StatKey, import("@/types/game").AttachmentEffect[]>();
+  allEffects.forEach((effect) => {
+    if (effect.stat && effect.type !== "conditional") {
+      const existing = effectMap.get(effect.stat) || [];
+      existing.push(effect);
+      effectMap.set(effect.stat, existing);
+    }
+  });
+
+  // 最大値を取るか、ランダムに選ぶ
+  const resultingEffects: import("@/types/game").AttachmentEffect[] = [];
+  const usedStatKeys = new Set<StatKey>();
+
+  // まず条件付き効果を継承（最大1つ）
+  const conditionalEffects = allEffects.filter((e) => e.type === "conditional");
+  if (conditionalEffects.length > 0) {
+    resultingEffects.push(pickOne(conditionalEffects, rng));
+  }
+
+  // 通常効果を選択
+  while (resultingEffects.length < targetEffectCount && usedStatKeys.size < effectMap.size) {
+    const availableStats = Array.from(effectMap.keys()).filter((s) => !usedStatKeys.has(s));
+    if (availableStats.length === 0) break;
+
+    const selectedStat = pickOne(availableStats, rng);
+    usedStatKeys.add(selectedStat);
+
+    const effectsForStat = effectMap.get(selectedStat) || [];
+    // 最大値の効果を選択
+    const bestEffect = effectsForStat.reduce((best, current) => {
+      const bestValue = (best.flatValue || 0) + (best.percentValue || 0) * 10;
+      const currentValue = (current.flatValue || 0) + (current.percentValue || 0) * 10;
+      return currentValue > bestValue ? current : best;
+    });
+
+    resultingEffects.push({
+      ...bestEffect,
+      id: createId("att-effect"),
+    });
+  }
+
+  // 不足分は新規生成
+  while (resultingEffects.length < targetEffectCount) {
+    resultingEffects.push(generateAttachmentEffect(resultRarity, base.slot, rng));
+  }
+
+  // 高レア度の場合、条件付き効果を追加
+  if (resultRarity === "S" || resultRarity === "SS" || resultRarity === "SSS") {
+    const hasConditional = resultingEffects.some((e) => e.type === "conditional");
+    if (!hasConditional) {
+      const conditionalEffect = generateConditionalEffect(resultRarity, rng);
+      if (conditionalEffect) {
+        resultingEffects.push(conditionalEffect);
+      }
+    }
+  }
+
+  return {
+    baseAttachment: base,
+    materialAttachment: material,
+    resultRarity,
+    resultingEffects,
+    spCost: getAttachmentSynthesisSPCost(base.rarity),
+    canSynthesize: true,
+  };
+}
+
+export function executeAttachmentSynthesis(
+  base: import("@/types/game").Attachment,
+  material: import("@/types/game").Attachment,
+  preview: import("@/types/game").AttachmentSynthesisPreview,
+  rng: RandomFn = Math.random,
+): import("@/types/game").Attachment {
+  return {
+    id: createId("attachment"),
+    slot: base.slot,
+    name: base.name,
+    rarity: preview.resultRarity,
+    dropStage: Math.max(base.dropStage, material.dropStage),
+    effects: preview.resultingEffects,
+  };
+}
+
+// Calculate total attachment bonuses for a monster
+export function calculateAttachmentBonuses(
+  attachments: import("@/types/game").Attachment[],
+  monsterHpPercent: number = 100,
+): {
+  flat: import("@/types/game").MonsterStats;
+  percent: import("@/types/game").MonsterStats;
+} {
+  const flat = { hp: 0, mp: 0, attack: 0, defense: 0, speed: 0 };
+  const percent = { hp: 0, mp: 0, attack: 0, defense: 0, speed: 0 };
+
+  attachments.forEach((attachment) => {
+    attachment.effects.forEach((effect) => {
+      if (!effect.stat) return;
+
+      if (effect.type === "statBoost" && effect.flatValue) {
+        flat[effect.stat] += effect.flatValue;
+      } else if (effect.type === "statPctBoost" && effect.percentValue) {
+        percent[effect.stat] += effect.percentValue;
+      } else if (effect.type === "conditional" && effect.percentValue && effect.threshold !== undefined) {
+        // Check if condition is met
+        const conditionMet = effect.condition?.includes("以下")
+          ? monsterHpPercent <= effect.threshold
+          : monsterHpPercent >= effect.threshold;
+
+        if (conditionMet) {
+          percent[effect.stat] += effect.percentValue;
+        }
+      }
+    });
+  });
+
+  return { flat, percent };
+}
+
+// Get attachments for a specific slot
+export function getAttachmentsForSlot(
+  inventory: import("@/types/game").Attachment[],
+  equippedIds: string[],
+): import("@/types/game").Attachment[] {
+  return equippedIds
+    .map((id) => inventory.find((a) => a.id === id))
+    .filter((a): a is import("@/types/game").Attachment => Boolean(a));
 }

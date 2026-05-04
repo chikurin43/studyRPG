@@ -122,6 +122,7 @@ export function AppShell() {
         taskTitle={completionEffects.taskTitle}
         reward={completionEffects.reward}
         monsterLevelUp={completionEffects.monsterLevelUp}
+        droppedAttachment={completionEffects.droppedAttachment}
         onComplete={hideCompletionEffects}
       />
     </div>

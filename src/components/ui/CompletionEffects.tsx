@@ -8,6 +8,7 @@ interface CompletionEffectsProps {
   taskTitle: string;
   reward: TaskCompletionReward | null;
   monsterLevelUp?: boolean;
+  droppedAttachment?: import("@/types/game").Attachment | null;
   onComplete: () => void;
 }
 
@@ -16,6 +17,7 @@ export function CompletionEffects({
   taskTitle, 
   reward, 
   monsterLevelUp = false,
+  droppedAttachment = null,
   onComplete 
 }: CompletionEffectsProps) {
   const [showReward, setShowReward] = useState(false);
@@ -106,6 +108,49 @@ export function CompletionEffects({
             </div>
           </div>
         </div>
+
+        {/* Attachment drop celebration */}
+        {droppedAttachment && (
+          <div className={`space-y-4 transition-all duration-700 ${
+            showReward ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
+          }`}>
+            <div className="bg-gradient-to-r from-purple-400/20 to-pink-400/20 backdrop-blur-md rounded-2xl p-6 border border-purple-400/30">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center justify-center gap-2">
+                <Sparkles className="h-5 w-5" />
+                アタッチメント獲得！
+              </h3>
+              <div className="bg-white/10 rounded-xl p-4 border border-white/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-sm font-medium text-purple-300">
+                    {droppedAttachment.slot === "weapon" ? "武器" : 
+                     droppedAttachment.slot === "armor" ? "防具" : "遺物"}
+                  </span>
+                  <span 
+                    className="rounded-full px-2 py-1 text-xs font-bold text-purple-300"
+                    style={{
+                      backgroundColor: droppedAttachment.rarity === "SSS" ? "rgba(140,100,180,0.15)" :
+                                       droppedAttachment.rarity === "SS" ? "rgba(166,68,50,0.15)" :
+                                       droppedAttachment.rarity === "S" ? "rgba(205,167,95,0.15)" :
+                                       droppedAttachment.rarity === "A" ? "rgba(61,102,125,0.15)" :
+                                       droppedAttachment.rarity === "B" ? "rgba(89,115,79,0.15)" :
+                                       "rgba(160,160,160,0.15)",
+                    }}
+                  >
+                    {droppedAttachment.rarity}
+                  </span>
+                </div>
+                <p className="text-white font-medium mb-2">{droppedAttachment.name}</p>
+                <div className="space-y-1">
+                  {droppedAttachment.effects.map((effect) => (
+                    <div key={effect.id} className="text-xs text-purple-200">
+                      • {effect.description}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Level up celebration */}
         {monsterLevelUp && (

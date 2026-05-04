@@ -11,8 +11,11 @@ import {
   createNextRaidBoss,
   createTimerBonusSnapshot,
   executeBattleTurn,
+  executeSynthesis as executeSynthesisCore,
   expToNextLevel,
   generateEquipment,
+  generateAttachment,
+  EQUIPMENT_SLOTS,
   getAvailableActions,
   getEnergyCap,
   getEquippedItems,
@@ -25,6 +28,10 @@ import {
   initializeBattleState,
   MAX_BATTLE_TURNS,
   normalizePersistedGameState,
+  previewSynthesis as previewSynthesisCore,
+  previewAttachmentSynthesis,
+  executeAttachmentSynthesis,
+  getAttachmentSynthesisSPCost,
   rerollChoiceSet,
   rerollEquipmentActiveSkill,
   rerollEquipmentPassiveSkill,
@@ -34,11 +41,16 @@ import {
 import type {
   CompletionEffectsState,
   Equipment,
+  Attachment,
+  AttachmentSynthesisPreview,
   PersistedGameState,
+  SynthesisSelection,
+  SynthesisPreview,
   Task,
   TaskCompletionReward,
   TimerBonusSnapshot,
   ViewId,
+  EquipmentSlot,
 } from "@/types/game";
 import type { BattleAction } from "@/lib/gameRules";
 
@@ -97,6 +109,13 @@ type Actions = {
   resetGame: () => void;
   showCompletionEffects: (taskTitle: string, reward: TaskCompletionReward, monsterLevelUp: boolean) => void;
   hideCompletionEffects: () => void;
+  previewSynthesis: (baseId: string, materialId: string, selection: SynthesisSelection) => SynthesisPreview | null;
+  executeSynthesis: (baseId: string, materialId: string, selection: SynthesisSelection) => void;
+  // Attachment actions
+  equipAttachment: (attachmentId: string, slot: EquipmentSlot) => void;
+  unequipAttachment: (attachmentId: string, slot: EquipmentSlot) => void;
+  previewAttachmentSynth: (baseId: string, materialId: string) => AttachmentSynthesisPreview | null;
+  executeAttachmentSynth: (baseId: string, materialId: string) => void;
 };
 
 export type GameStoreState = PersistedGameState & UIState & Actions;
@@ -121,6 +140,8 @@ function getPersistedSlice(state: GameStoreState): PersistedGameState {
     raid: state.raid,
     equipmentInventory: state.equipmentInventory,
     equippedSlots: state.equippedSlots,
+    attachmentInventory: state.attachmentInventory,
+    equippedAttachments: state.equippedAttachments,
   };
 }
 
@@ -157,7 +178,7 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
 
   return createStore<GameStoreState>()(
     persist(
-      (set) => ({
+      (set, get) => ({
         ...createInitialGameState(),
         activeView: "tasks",
         lastActionMessage: "勉強タスクを登録して、最初の育成ループを始めましょう。",
@@ -166,6 +187,7 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
           taskTitle: "",
           reward: null,
           monsterLevelUp: false,
+          droppedAttachment: null,
         },
 
         setActiveView: (view) => set({ activeView: view }),
@@ -636,6 +658,15 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 : currentTask,
             );
 
+            // Low chance to drop attachment based on task difficulty (10% + difficulty * 2%)
+            const attachmentDropChance = 0.10 + (task.difficulty * 0.02);
+            let droppedAttachment: Attachment | null = null;
+            if (random() < attachmentDropChance) {
+              // Determine stage based on monster level
+              const stage = Math.max(1, Math.floor(state.monster.level / 10));
+              droppedAttachment = generateAttachment(stage, random);
+            }
+
             // If task is locked, create a copy and add it back to pending tasks
             let finalTasks: Task[] = updatedTasks;
             if (task.locked) {
@@ -653,6 +684,10 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               finalTasks = [newTask, ...updatedTasks];
             }
 
+            const attachmentMessage = droppedAttachment
+              ? ` アタッチメント「${droppedAttachment.name}」を獲得！`
+              : "";
+
             return {
               tasks: finalTasks,
               timer: state.timer.activeTaskId === taskId ? createEmptyTimer() : state.timer,
@@ -661,6 +696,9 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 sp: state.resources.sp + reward.sp,
                 energy: nextEnergy,
               },
+              attachmentInventory: droppedAttachment
+                ? [...state.attachmentInventory, droppedAttachment]
+                : state.attachmentInventory,
               completionEffects: {
                 isVisible: true,
                 taskTitle: task.title,
@@ -670,8 +708,9 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                   energy: actualEnergyGain,
                 },
                 monsterLevelUp,
+                droppedAttachment: droppedAttachment,
               },
-              lastActionMessage: `タスク達成: EXP +${reward.exp}, SP +${reward.sp}, Energy +${actualEnergyGain}`,
+              lastActionMessage: `タスク達成: EXP +${reward.exp}, SP +${reward.sp}, Energy +${actualEnergyGain}${attachmentMessage}`,
             };
           }),
 
@@ -1108,6 +1147,7 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               taskTitle: "",
               reward: null,
               monsterLevelUp: false,
+              droppedAttachment: null,
             },
           })),
 
@@ -1118,6 +1158,7 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               taskTitle,
               reward,
               monsterLevelUp,
+              droppedAttachment: null,
             },
           })),
 
@@ -1128,6 +1169,145 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               isVisible: false,
             },
           })),
+
+        previewSynthesis: (baseId: string, materialId: string, selection: SynthesisSelection): SynthesisPreview | null => {
+          const state = get();
+          const base = state.equipmentInventory.find((e: Equipment) => e.id === baseId);
+          const material = state.equipmentInventory.find((e: Equipment) => e.id === materialId);
+          if (!base || !material) return null;
+          return previewSynthesisCore(base, material, selection, state.resources.sp);
+        },
+
+        executeSynthesis: (baseId: string, materialId: string, selection: SynthesisSelection) =>
+          set((state: GameStoreState) => {
+            const base = state.equipmentInventory.find((e: Equipment) => e.id === baseId);
+            const material = state.equipmentInventory.find((e: Equipment) => e.id === materialId);
+            if (!base || !material) {
+              return { lastActionMessage: "装備が見つかりません。" };
+            }
+
+            const result = executeSynthesisCore(base, material, selection, state.resources.sp, random);
+            if (!result) {
+              return { lastActionMessage: "合成できません。条件を確認してください。" };
+            }
+
+            const { newEquipment, spCost } = result;
+
+            // Remove base and material, add new equipment
+            const nextInventory = state.equipmentInventory
+              .filter((e: Equipment) => e.id !== baseId && e.id !== materialId)
+              .concat(newEquipment);
+
+            // Update equipped slots if base or material was equipped
+            const nextEquippedSlots = { ...state.equippedSlots };
+            if (nextEquippedSlots[base.slot] === baseId || nextEquippedSlots[base.slot] === materialId) {
+              nextEquippedSlots[base.slot] = newEquipment.id;
+            }
+
+            return {
+              equipmentInventory: nextInventory,
+              equippedSlots: nextEquippedSlots,
+              resources: {
+                ...state.resources,
+                sp: state.resources.sp - spCost,
+              },
+              lastActionMessage: `合成成功！ ${newEquipment.name} (${newEquipment.rarity}) を獲得しました。`,
+            };
+          }),
+
+        // Attachment actions
+        equipAttachment: (attachmentId: string, slot: EquipmentSlot) =>
+          set((state: GameStoreState) => {
+            const attachment = state.attachmentInventory.find((a: Attachment) => a.id === attachmentId);
+            if (!attachment) {
+              return { lastActionMessage: "アタッチメントが見つかりません。" };
+            }
+            if (attachment.slot !== slot) {
+              return { lastActionMessage: "このスロットには装着できません。" };
+            }
+            const currentEquipped = state.equippedAttachments[slot];
+            if (currentEquipped.length >= 3) {
+              return { lastActionMessage: "このスロットにはこれ以上装着できません（最大3つ）。" };
+            }
+            if (currentEquipped.includes(attachmentId)) {
+              return { lastActionMessage: "既に装着済みです。" };
+            }
+
+            return {
+              equippedAttachments: {
+                ...state.equippedAttachments,
+                [slot]: [...currentEquipped, attachmentId],
+              },
+              lastActionMessage: `${attachment.name} を装着しました。`,
+            };
+          }),
+
+        unequipAttachment: (attachmentId: string, slot: EquipmentSlot) =>
+          set((state: GameStoreState) => {
+            const attachment = state.attachmentInventory.find((a: Attachment) => a.id === attachmentId);
+            return {
+              equippedAttachments: {
+                ...state.equippedAttachments,
+                [slot]: state.equippedAttachments[slot].filter((id: string) => id !== attachmentId),
+              },
+              lastActionMessage: attachment ? `${attachment.name} を外しました。` : "アタッチメントを外しました。",
+            };
+          }),
+
+        previewAttachmentSynth: (baseId: string, materialId: string): AttachmentSynthesisPreview | null => {
+          const state = get();
+          const base = state.attachmentInventory.find((a: Attachment) => a.id === baseId);
+          const material = state.attachmentInventory.find((a: Attachment) => a.id === materialId);
+          if (!base || !material) return null;
+          return previewAttachmentSynthesis(base, material, random);
+        },
+
+        executeAttachmentSynth: (baseId: string, materialId: string) =>
+          set((state: GameStoreState) => {
+            const base = state.attachmentInventory.find((a: Attachment) => a.id === baseId);
+            const material = state.attachmentInventory.find((a: Attachment) => a.id === materialId);
+            if (!base || !material) {
+              return { lastActionMessage: "アタッチメントが見つかりません。" };
+            }
+
+            const preview = previewAttachmentSynthesis(base, material, random);
+            if (!preview.canSynthesize) {
+              return { lastActionMessage: preview.reason || "合成できません。" };
+            }
+
+            const spCost = getAttachmentSynthesisSPCost(base.rarity);
+            if (state.resources.sp < spCost) {
+              return { lastActionMessage: `SPが足りません。必要: ${spCost}` };
+            }
+
+            const newAttachment = executeAttachmentSynthesis(base, material, preview, random);
+
+            // Remove base and material, add new attachment
+            const nextInventory = state.attachmentInventory
+              .filter((a: Attachment) => a.id !== baseId && a.id !== materialId)
+              .concat(newAttachment);
+
+            // Update equipped attachments if base or material was equipped
+            const nextEquippedAttachments = { ...state.equippedAttachments };
+            EQUIPMENT_SLOTS.forEach((slot: EquipmentSlot) => {
+              if (nextEquippedAttachments[slot].includes(baseId) || nextEquippedAttachments[slot].includes(materialId)) {
+                nextEquippedAttachments[slot] = nextEquippedAttachments[slot]
+                  .filter((id: string) => id !== baseId && id !== materialId)
+                  .concat(newAttachment.id);
+              }
+            });
+
+            return {
+              attachmentInventory: nextInventory,
+              equippedAttachments: nextEquippedAttachments,
+              resources: {
+                ...state.resources,
+                sp: state.resources.sp - spCost,
+              },
+              lastActionMessage: `アタッチメント合成成功！ ${newAttachment.name} (${newAttachment.rarity}) を獲得しました。`,
+            };
+          }),
+
       }),
       {
         name: STORAGE_KEY,

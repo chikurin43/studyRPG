@@ -1,6 +1,6 @@
 import { getGameStore } from "@/store/gameStore";
 import type { GameStoreState } from "@/store/gameStore";
-import { createInitialGameState, generateEquipment } from "@/lib/gameRules";
+import { createInitialGameState, generateEquipment, generateAttachment } from "@/lib/gameRules";
 
 declare global {
   interface Window {
@@ -26,6 +26,9 @@ export interface DebugCheats {
   // Equipment cheats
   addRandomEquipment(): void;
   maxEquipment(): void;
+  
+  // Attachment cheats
+  addRandomAttachments(): void;
   
   // Raid cheats
   instantRaidWin(): void;
@@ -191,6 +194,21 @@ export function createDebugCheats(): DebugCheats {
         lastActionMessage: "デバッグ: 装備を10個追加しました"
       });
       console.log("Added 10 random high-level equipment");
+    },
+
+    // Attachment cheats
+    addRandomAttachments() {
+      const currentState = store.getState();
+      const newAttachments = [];
+      for (let i = 0; i < 10; i++) {
+        const attachment = generateAttachment(currentState.monster.level, Math.random);
+        newAttachments.push(attachment);
+      }
+      store.setState({
+        attachmentInventory: [...newAttachments, ...currentState.attachmentInventory],
+        lastActionMessage: "デバッグ: アタッチメントを10個追加しました"
+      });
+      console.log("Added 10 random attachments");
     },
 
     // Raid cheats

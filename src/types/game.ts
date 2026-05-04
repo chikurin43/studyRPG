@@ -5,6 +5,7 @@ export type Element = "physical" | "fire" | "ice" | "lightning";
 export type StatusEffectType = "burn" | "shock" | "frostbite" | "stun" | "slow" | "defenseDown" | "darkness" | "seal" | "bleed";
 export type EquipmentSlot = "weapon" | "armor" | "relic";
 export type EquipmentRarity = "C" | "B" | "A" | "S" | "SS" | "SSS";
+export type AttachmentRarity = "C" | "B" | "A" | "S" | "SS" | "SSS";
 
 export type SkillTemplate = "attack" | "buff" | "reward";
 export type SkillTarget = "self" | "nextTask" | "raid" | "passive";
@@ -180,6 +181,27 @@ export interface EquipmentPassiveSkill {
   cooldown?: number;
 }
 
+// Attachment types
+export interface AttachmentEffect {
+  id: string;
+  type: "statBoost" | "statPctBoost" | "conditional" | "tradeOff";
+  stat?: StatKey;
+  flatValue?: number;
+  percentValue?: number;
+  condition?: string;
+  threshold?: number;
+  description: string;
+}
+
+export interface Attachment {
+  id: string;
+  slot: EquipmentSlot;
+  name: string;
+  rarity: AttachmentRarity;
+  dropStage: number;
+  effects: AttachmentEffect[];
+}
+
 export interface Equipment {
   id: string;
   slot: EquipmentSlot;
@@ -192,6 +214,7 @@ export interface Equipment {
 }
 
 export type EquippedSlots = Record<EquipmentSlot, string | null>;
+export type EquippedAttachments = Record<EquipmentSlot, string[]>; // Each slot can have up to 3 attachments
 
 export interface RaidBoss {
   stage: number;
@@ -259,6 +282,8 @@ export interface PersistedGameState {
   raid: RaidState;
   equipmentInventory: Equipment[];
   equippedSlots: EquippedSlots;
+  attachmentInventory: Attachment[];
+  equippedAttachments: EquippedAttachments;
 }
 
 export interface CompletionReward {
@@ -282,6 +307,7 @@ export interface CompletionEffectsState {
   taskTitle: string;
   reward: TaskCompletionReward | null;
   monsterLevelUp: boolean;
+  droppedAttachment: Attachment | null;
 }
 
 export interface CombatProfile {
@@ -306,4 +332,33 @@ export interface SimulatedRaidBattle {
   defeated: boolean;
   today: string;
   previousStage: number;
+}
+
+// Synthesis system types
+export interface SynthesisSelection {
+  inheritedStats: StatKey[];
+  inheritedSkill: "active" | "passive" | null;
+}
+
+export interface SynthesisPreview {
+  baseEquipment: Equipment;
+  materialEquipment: Equipment;
+  resultRarity: EquipmentRarity;
+  resultingStats: MonsterStats;
+  resultingActiveSkill: EquipmentActiveSkill;
+  resultingPassiveSkill: EquipmentPassiveSkill;
+  spCost: number;
+  canSynthesize: boolean;
+  reason?: string;
+}
+
+// Attachment synthesis types
+export interface AttachmentSynthesisPreview {
+  baseAttachment: Attachment;
+  materialAttachment: Attachment;
+  resultRarity: AttachmentRarity;
+  resultingEffects: AttachmentEffect[];
+  spCost: number;
+  canSynthesize: boolean;
+  reason?: string;
 }

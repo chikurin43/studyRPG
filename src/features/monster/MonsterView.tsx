@@ -1,9 +1,12 @@
 import { useState, useMemo } from "react";
-import { RefreshCw, Shield, Sparkles, Swords, WandSparkles, Filter, ArrowUpDown, X } from "lucide-react";
+import { RefreshCw, Shield, Sparkles, Swords, WandSparkles, Filter, ArrowUpDown, X, Combine, Puzzle } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Meter } from "@/components/ui/Meter";
 import { Panel } from "@/components/ui/Panel";
+import { SynthesisModal } from "@/components/ui/SynthesisModal";
+import { AttachmentCard, AttachmentSlotSection } from "@/components/ui/AttachmentCard";
+import { AttachmentSynthesisModal } from "@/components/ui/AttachmentSynthesisModal";
 import { formatNumber } from "@/lib/formatters";
 import {
   expToNextLevel,
@@ -21,6 +24,7 @@ import {
   filterEquipment,
   sortEquipment,
   groupTagsByCategory,
+  canSynthesize,
   type EquipmentSortKey,
   type EquipmentFilterOptions,
   type TagCategory,
@@ -28,7 +32,7 @@ import {
   EQUIPMENT_SLOTS,
 } from "@/lib/gameRules";
 import { useGameStore } from "@/store/gameStore";
-import type { Equipment, EquipmentRarity, EquipmentSlot } from "@/types/game";
+import type { Equipment, EquipmentRarity, EquipmentSlot, Attachment } from "@/types/game";
 
 const perkLabels = {
   taskRewardMultiplier: "Task reward",
@@ -74,10 +78,31 @@ export function MonsterView() {
   const resources = useGameStore((state) => state.resources);
   const equipmentInventory = useGameStore((state) => state.equipmentInventory);
   const equippedSlots = useGameStore((state) => state.equippedSlots);
+  const attachmentInventory = useGameStore((state) => state.attachmentInventory);
+  const equippedAttachments = useGameStore((state) => state.equippedAttachments);
   const claimLevelChoice = useGameStore((state) => state.claimLevelChoice);
   const rerollLevelChoices = useGameStore((state) => state.rerollLevelChoices);
   const equipItem = useGameStore((state) => state.equipItem);
   const rerollEquipmentSkill = useGameStore((state) => state.rerollEquipmentSkill);
+  const previewSynthesis = useGameStore((state) => state.previewSynthesis);
+  const executeSynthesis = useGameStore((state) => state.executeSynthesis);
+  const equipAttachment = useGameStore((state) => state.equipAttachment);
+  const unequipAttachment = useGameStore((state) => state.unequipAttachment);
+  const previewAttachmentSynth = useGameStore((state) => state.previewAttachmentSynth);
+  const executeAttachmentSynth = useGameStore((state) => state.executeAttachmentSynth);
+
+  // Synthesis state
+  const [isSynthesisMode, setIsSynthesisMode] = useState(false);
+  const [synthesisBase, setSynthesisBase] = useState<Equipment | null>(null);
+  const [synthesisMaterial, setSynthesisMaterial] = useState<Equipment | null>(null);
+  const [isSynthesisModalOpen, setIsSynthesisModalOpen] = useState(false);
+
+  // Attachment synthesis state
+  const [isAttachmentSynthMode, setIsAttachmentSynthMode] = useState(false);
+  const [attachmentSynthBase, setAttachmentSynthBase] = useState<Attachment | null>(null);
+  const [attachmentSynthMaterial, setAttachmentSynthMaterial] = useState<Attachment | null>(null);
+  const [isAttachmentSynthModalOpen, setIsAttachmentSynthModalOpen] = useState(false);
+  const [showAttachmentInventory, setShowAttachmentInventory] = useState(false);
 
   // Filter & Sort state
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -107,6 +132,20 @@ export function MonsterView() {
     return sortEquipment(filtered, sortKey, monster.level);
   }, [equipmentInventory, selectedTags, selectedRarities, selectedSlots, sortKey, monster.level]);
 
+  // Create a map to check if items have synthesis partners
+  const synthesisPartnerMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    equipmentInventory.forEach((item) => {
+      const hasPartner = equipmentInventory.some(
+        other => other.id !== item.id && 
+                 other.slot === item.slot && 
+                 other.rarity === item.rarity
+      );
+      map.set(item.id, hasPartner);
+    });
+    return map;
+  }, [equipmentInventory]);
+
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
   };
@@ -130,6 +169,91 @@ export function MonsterView() {
   };
 
   const hasActiveFilters = selectedTags.length > 0 || selectedRarities.length > 0 || selectedSlots.length > 0;
+
+  // Synthesis handlers
+  const handleSynthesisModeToggle = () => {
+    setIsSynthesisMode(!isSynthesisMode);
+    setSynthesisBase(null);
+    setSynthesisMaterial(null);
+  };
+
+  const handleSelectSynthesisItem = (item: Equipment) => {
+    if (!isSynthesisMode) return;
+
+    if (!synthesisBase) {
+      setSynthesisBase(item);
+      return;
+    }
+
+    if (synthesisBase.id === item.id) {
+      // Deselect if clicking base again
+      setSynthesisBase(null);
+      return;
+    }
+
+    // Check if can be material (same slot and rarity)
+    if (synthesisBase.slot === item.slot && synthesisBase.rarity === item.rarity) {
+      setSynthesisMaterial(item);
+      setIsSynthesisModalOpen(true);
+    }
+  };
+
+  const handleCloseSynthesisModal = () => {
+    setIsSynthesisModalOpen(false);
+    setSynthesisMaterial(null);
+    if (!isSynthesisMode) {
+      setSynthesisBase(null);
+    }
+  };
+
+  const handleSynthesisComplete = () => {
+    setIsSynthesisModalOpen(false);
+    setSynthesisBase(null);
+    setSynthesisMaterial(null);
+    setIsSynthesisMode(false);
+  };
+
+  // Attachment synthesis handlers
+  const handleAttachmentSynthModeToggle = () => {
+    setIsAttachmentSynthMode(!isAttachmentSynthMode);
+    setAttachmentSynthBase(null);
+    setAttachmentSynthMaterial(null);
+  };
+
+  const handleSelectAttachmentSynthItem = (attachment: Attachment) => {
+    if (!isAttachmentSynthMode) return;
+
+    if (!attachmentSynthBase) {
+      setAttachmentSynthBase(attachment);
+      return;
+    }
+
+    if (attachmentSynthBase.id === attachment.id) {
+      setAttachmentSynthBase(null);
+      return;
+    }
+
+    // Check if can be material (same slot)
+    if (attachmentSynthBase.slot === attachment.slot) {
+      setAttachmentSynthMaterial(attachment);
+      setIsAttachmentSynthModalOpen(true);
+    }
+  };
+
+  const handleCloseAttachmentSynthModal = () => {
+    setIsAttachmentSynthModalOpen(false);
+    setAttachmentSynthMaterial(null);
+    if (!isAttachmentSynthMode) {
+      setAttachmentSynthBase(null);
+    }
+  };
+
+  const handleAttachmentSynthComplete = () => {
+    setIsAttachmentSynthModalOpen(false);
+    setAttachmentSynthBase(null);
+    setAttachmentSynthMaterial(null);
+    setIsAttachmentSynthMode(false);
+  };
 
   return (
     <div className="space-y-5">
@@ -392,12 +516,129 @@ export function MonsterView() {
         </div>
       </Panel>
 
+      {/* Attachments Panel */}
+      <Panel
+        eyebrow="Attachments"
+        title="アタッチメント"
+        description="各装備スロットに最大3つまで装着可能。タスク完了時に低確率でドロップ。"
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant={isAttachmentSynthMode ? "primary" : "ghost"}
+              size="sm"
+              onClick={handleAttachmentSynthModeToggle}
+              disabled={attachmentInventory.length < 2}
+            >
+              <Combine className="mr-2 h-4 w-4" />
+              {isAttachmentSynthMode ? "合成モードON" : "合成モード"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowAttachmentInventory(!showAttachmentInventory)}
+            >
+              <Puzzle className="mr-2 h-4 w-4" />
+              インベントリ ({attachmentInventory.length})
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-3">
+          {EQUIPMENT_SLOTS.map((slot) => (
+            <AttachmentSlotSection
+              key={slot}
+              slot={slot}
+              equippedIds={equippedAttachments[slot]}
+              inventory={attachmentInventory}
+              onEquip={equipAttachment}
+              onUnequip={unequipAttachment}
+            />
+          ))}
+        </div>
+
+        {/* Attachment Inventory */}
+        {showAttachmentInventory && (
+          <div className="mt-4 rounded-[20px] border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-semibold text-[var(--ink-strong)]">アタッチメントインベントリ</span>
+              {attachmentSynthBase && (
+                <div className="flex items-center gap-2">
+                  <Badge tone="ember">ベース: {attachmentSynthBase.name}</Badge>
+                  <Button variant="ghost" size="sm" onClick={() => setAttachmentSynthBase(null)}>
+                    解除
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {isAttachmentSynthMode && !attachmentSynthBase && (
+              <p className="mb-3 text-sm text-[var(--accent-amber)]">
+                ベースにするアタッチメントを選択してください
+              </p>
+            )}
+            {isAttachmentSynthMode && attachmentSynthBase && (
+              <p className="mb-3 text-sm text-[var(--accent-amber)]">
+                同じスロットの素材を選択してください
+              </p>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {attachmentInventory.map((attachment) => {
+                const isEquipped = equippedAttachments[attachment.slot].includes(attachment.id);
+                const isBase = attachmentSynthBase?.id === attachment.id;
+                const canBeMaterial = attachmentSynthBase &&
+                  attachment.slot === attachmentSynthBase.slot &&
+                  attachment.id !== attachmentSynthBase.id;
+
+                return (
+                  <div
+                    key={attachment.id}
+                    onClick={() => isAttachmentSynthMode && handleSelectAttachmentSynthItem(attachment)}
+                    className={`cursor-pointer transition-all ${
+                      isAttachmentSynthMode ? "hover:ring-2 hover:ring-[var(--accent-amber)]" : ""
+                    } ${isBase ? "ring-2 ring-[var(--accent-ember)]" : ""}`}
+                  >
+                    <AttachmentCard
+                      attachment={attachment}
+                      isEquipped={isEquipped}
+                      onEquip={!isAttachmentSynthMode ? () => equipAttachment(attachment.id, attachment.slot) : undefined}
+                      onUnequip={!isAttachmentSynthMode ? () => unequipAttachment(attachment.id, attachment.slot) : undefined}
+                      disabled={isAttachmentSynthMode && !canBeMaterial && !isBase}
+                    />
+                    {isBase && (
+                      <div className="mt-1 text-center text-xs text-[var(--accent-ember)]">ベース</div>
+                    )}
+                    {canBeMaterial && (
+                      <div className="mt-1 text-center text-xs text-[var(--accent-moss)]">クリックで素材に選択</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {attachmentInventory.length === 0 && (
+              <div className="rounded-[20px] border border-dashed border-[var(--line-strong)] px-4 py-8 text-center text-[var(--ink-soft)]">
+                <p className="text-sm">アタッチメントがありません。タスクを完了してドロップを狙いましょう。</p>
+              </div>
+            )}
+          </div>
+        )}
+      </Panel>
+
       <Panel
         eyebrow="Inventory"
         title="装備インベントリ"
         description="ステージが進むほどレア装備が出やすくなります。気に入ったアクティブ/パッシブが出るまで SP で回せます。"
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              variant={isSynthesisMode ? "primary" : "ghost"}
+              size="sm"
+              onClick={handleSynthesisModeToggle}
+            >
+              <Combine className="mr-2 h-4 w-4" />
+              {isSynthesisMode ? "合成モードON" : "合成モード"}
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowFilters(!showFilters)}>
               <Filter className="mr-2 h-4 w-4" />
               フィルター {hasActiveFilters && `(${selectedTags.length + selectedRarities.length + selectedSlots.length})`}
@@ -507,16 +748,56 @@ export function MonsterView() {
           {hasActiveFilters && <span className="text-[var(--accent-ember)]">フィルター適用中</span>}
         </div>
 
+        {/* Synthesis Mode Status */}
+        {isSynthesisMode && (
+          <div className="mb-4 rounded-[16px] border border-[rgba(205,167,95,0.3)] bg-[rgba(205,167,95,0.08)] p-4">
+            <p className="text-sm text-stone-300">
+              {synthesisBase ? (
+                <>
+                  ベース: <span className="font-medium text-[var(--accent-amber)]">{synthesisBase.name}</span>
+                  {" — "}同スロット・同レア度の装備を選択してください
+                </>
+              ) : (
+                <>合成するベース装備を選択してください（同レア度の装備2つが必要）</>
+              )}
+            </p>
+          </div>
+        )}
+
         <div className="space-y-3">
           {filteredAndSortedEquipment.map((item) => {
             const isEquipped = equippedSlots[item.slot] === item.id;
             const activeTags = item.activeSkill.tags;
             const passiveTags = item.passiveSkill.tags;
+            const isSynthesisBase = synthesisBase?.id === item.id;
+            const canBeMaterial = synthesisBase && 
+              synthesisBase.id !== item.id && 
+              synthesisBase.slot === item.slot && 
+              synthesisBase.rarity === item.rarity;
+            const isImpossibleInSynthesis = isSynthesisMode && synthesisBase && 
+              synthesisBase.id !== item.id && 
+              (synthesisBase.slot !== item.slot || synthesisBase.rarity !== item.rarity);
+            
+            // Check if this item has any synthesis partners in the inventory
+            const hasSynthesisPartner = !isSynthesisMode || synthesisBase ? true : synthesisPartnerMap.get(item.id) || false;
+            
+            const shouldDisableForNoPartner = isSynthesisMode && !synthesisBase && !hasSynthesisPartner;
 
             return (
               <article
                 key={item.id}
-                className="rounded-[22px] border border-[var(--line-soft)] bg-white/65 p-4"
+                onClick={() => isSynthesisMode && !isImpossibleInSynthesis && !shouldDisableForNoPartner && handleSelectSynthesisItem(item)}
+                className={`rounded-[22px] border p-4 transition ${
+                  isSynthesisMode 
+                    ? isSynthesisBase
+                      ? "border-[var(--accent-amber)] bg-[rgba(205,167,95,0.12)] cursor-pointer"
+                      : canBeMaterial
+                        ? "border-[var(--accent-moss)] bg-[rgba(89,115,79,0.08)] cursor-pointer hover:bg-[rgba(89,115,79,0.12)]"
+                        : isImpossibleInSynthesis || shouldDisableForNoPartner
+                          ? "border-stone-400 bg-white/30 opacity-50 cursor-not-allowed"
+                          : "border-[var(--line-soft)] bg-white/65 cursor-pointer hover:bg-white/80"
+                    : "border-[var(--line-soft)] bg-white/65"
+                }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0 flex-1 space-y-3">
@@ -589,25 +870,40 @@ export function MonsterView() {
                     </div>
                   </div>
 
-                  <div className="flex w-full flex-wrap items-center gap-2 lg:w-[260px] lg:justify-end">
-                    <Button variant={isEquipped ? "ghost" : "secondary"} onClick={() => equipItem(item.id)}>
-                      {isEquipped ? "再装備" : "装備する"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={resources.sp < equipmentRerollCost}
-                      onClick={() => rerollEquipmentSkill(item.id, "active")}
-                    >
-                      Active reroll
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={resources.sp < equipmentRerollCost}
-                      onClick={() => rerollEquipmentSkill(item.id, "passive")}
-                    >
-                      Passive reroll
-                    </Button>
-                  </div>
+                  {!isSynthesisMode && (
+                    <div className="flex w-full flex-wrap items-center gap-2 lg:w-[260px] lg:justify-end">
+                      <Button variant={isEquipped ? "ghost" : "secondary"} onClick={() => equipItem(item.id)}>
+                        {isEquipped ? "再装備" : "装備する"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={resources.sp < equipmentRerollCost}
+                        onClick={() => rerollEquipmentSkill(item.id, "active")}
+                      >
+                        Active reroll
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={resources.sp < equipmentRerollCost}
+                        onClick={() => rerollEquipmentSkill(item.id, "passive")}
+                      >
+                        Passive reroll
+                      </Button>
+                    </div>
+                  )}
+                  {isSynthesisMode && isSynthesisBase && (
+                    <div className="flex items-center gap-2 lg:w-[260px] lg:justify-end">
+                      <Badge tone="ember">ベース選択中</Badge>
+                      <Button variant="ghost" size="sm" onClick={() => setSynthesisBase(null)}>
+                        解除
+                      </Button>
+                    </div>
+                  )}
+                  {isSynthesisMode && canBeMaterial && (
+                    <div className="flex items-center gap-2 lg:w-[260px] lg:justify-end">
+                      <span className="text-xs text-[var(--accent-moss)]">クリックで素材に選択</span>
+                    </div>
+                  )}
                 </div>
               </article>
             );
@@ -615,8 +911,8 @@ export function MonsterView() {
         </div>
 
         {filteredAndSortedEquipment.length === 0 && (
-          <div className="rounded-[24px] border border-dashed border-[var(--line-strong)] px-4 py-8 text-center text-sm text-[var(--ink-soft)]">
-            フィルター条件に一致する装備がありません
+          <div className="rounded-[20px] border border-dashed border-[var(--line-strong)] px-4 py-12 text-center text-[var(--ink-soft)]">
+            <p className="text-sm">条件に合う装備がありません。</p>
           </div>
         )}
       </Panel>
@@ -648,6 +944,35 @@ export function MonsterView() {
           )}
         </div>
       </Panel>
+
+      {/* Synthesis Modal */}
+      <SynthesisModal
+        isOpen={isSynthesisModalOpen}
+        onClose={handleCloseSynthesisModal}
+        base={synthesisBase}
+        material={synthesisMaterial}
+        availableSP={resources.sp}
+        monsterLevel={monster.level}
+        onPreview={previewSynthesis}
+        onExecute={(baseId, materialId, selection) => {
+          executeSynthesis(baseId, materialId, selection);
+          handleSynthesisComplete();
+        }}
+      />
+
+      {/* Attachment Synthesis Modal */}
+      <AttachmentSynthesisModal
+        isOpen={isAttachmentSynthModalOpen}
+        onClose={handleCloseAttachmentSynthModal}
+        base={attachmentSynthBase}
+        material={attachmentSynthMaterial}
+        availableSP={resources.sp}
+        onPreview={previewAttachmentSynth}
+        onExecute={(baseId, materialId) => {
+          executeAttachmentSynth(baseId, materialId);
+          handleAttachmentSynthComplete();
+        }}
+      />
     </div>
   );
 }

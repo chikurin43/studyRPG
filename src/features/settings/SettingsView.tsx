@@ -51,6 +51,8 @@ export function SettingsView() {
         raid,
         equipmentInventory,
         equippedSlots,
+        attachmentInventory: [],
+        equippedAttachments: { weapon: [], armor: [], relic: [] },
       };
 
       const { blob, filename } = exportSaveData(state, password);
