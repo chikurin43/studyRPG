@@ -581,7 +581,7 @@ export function MonsterView() {
                       </Button>
                     </div>
                     {/* Random Statuses */}
-                    {item.randomStatuses.length > 0 && (
+                    {item.randomStatuses?.length > 0 && (
                       <div className="mt-4 rounded-[18px] bg-stone-950/5 p-4">
                         <div className="flex items-center gap-2">
                           <Sparkles className="h-4 w-4 text-[var(--accent-amber)]" />
@@ -1101,7 +1101,7 @@ export function MonsterView() {
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
                       </div>
                       {/* Random Statuses */}
-                      {item.randomStatuses.length > 0 && (
+                      {item.randomStatuses?.length > 0 && (
                         <div className="mt-4 rounded-[18px] bg-stone-950/5 p-4">
                           <div className="flex items-center gap-2">
                             <Sparkles className="h-4 w-4 text-[var(--accent-amber)]" />

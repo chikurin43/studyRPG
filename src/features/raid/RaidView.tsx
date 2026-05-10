@@ -240,7 +240,7 @@ export function RaidView() {
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
                     {/* Random Statuses */}
-                    {item.randomStatuses.length > 0 && (
+                    {item.randomStatuses?.length > 0 && (
                       <div className="mt-3 rounded-[16px] bg-stone-950/3 p-3">
                         <div className="flex items-center gap-2">
                           <Sparkles className="h-3 w-3 text-[var(--accent-amber)]" />
@@ -286,7 +286,7 @@ export function RaidView() {
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
                     {/* Random Statuses */}
-                    {item.randomStatuses.length > 0 && (
+                    {item.randomStatuses?.length > 0 && (
                       <div className="mt-3 rounded-[16px] bg-stone-950/3 p-3">
                         <div className="flex items-center gap-2">
                           <Sparkles className="h-3 w-3 text-[var(--accent-amber)]" />
