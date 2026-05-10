@@ -25,14 +25,22 @@ import {
   sortEquipment,
   groupTagsByCategory,
   canSynthesize,
+  getAllAttachmentEffectCategories,
+  getAllAttachmentEffectTypes,
+  filterAttachments,
+  sortAttachments,
+  getAttachmentEffectCategoryLabel,
+  getAttachmentEffectTypeLabel,
   type EquipmentSortKey,
   type EquipmentFilterOptions,
+  type AttachmentSortKey,
+  type AttachmentFilterOptions,
   type TagCategory,
   RARITIES,
   EQUIPMENT_SLOTS,
 } from "@/lib/gameRules";
 import { useGameStore } from "@/store/gameStore";
-import type { Equipment, EquipmentRarity, EquipmentSlot, Attachment } from "@/types/game";
+import type { Equipment, EquipmentRarity, EquipmentSlot, Attachment, AttachmentRarity, AttachmentEffectCategory, AttachmentEffectType } from "@/types/game";
 
 const perkLabels = {
   taskRewardMultiplier: "Task reward",
@@ -73,6 +81,16 @@ const SORT_OPTIONS: { key: EquipmentSortKey; label: string }[] = [
   { key: "powerDesc", label: "スキル威力（高→低）" },
 ];
 
+const ATTACHMENT_SORT_OPTIONS: { key: AttachmentSortKey; label: string }[] = [
+  { key: "dropStageDesc", label: "ステージ（高→低）" },
+  { key: "rarityDesc", label: "レア度（高→低）" },
+  { key: "rarityAsc", label: "レア度（低→高）" },
+  { key: "effectCountDesc", label: "効果数（多→少）" },
+  { key: "effectCountAsc", label: "効果数（少→多）" },
+  { key: "nameAsc", label: "名前（あ→ん）" },
+  { key: "nameDesc", label: "名前（ん→あ）" },
+];
+
 export function MonsterView() {
   const monster = useGameStore((state) => state.monster);
   const resources = useGameStore((state) => state.resources);
@@ -111,6 +129,14 @@ export function MonsterView() {
   const [sortKey, setSortKey] = useState<EquipmentSortKey>("dropStageDesc");
   const [showFilters, setShowFilters] = useState(false);
 
+  // Attachment Filter & Sort state
+  const [selectedAttachmentRarities, setSelectedAttachmentRarities] = useState<AttachmentRarity[]>([]);
+  const [selectedAttachmentSlots, setSelectedAttachmentSlots] = useState<EquipmentSlot[]>([]);
+  const [selectedAttachmentCategories, setSelectedAttachmentCategories] = useState<AttachmentEffectCategory[]>([]);
+  const [selectedAttachmentTypes, setSelectedAttachmentTypes] = useState<AttachmentEffectType[]>([]);
+  const [attachmentSortKey, setAttachmentSortKey] = useState<AttachmentSortKey>("dropStageDesc");
+  const [showAttachmentFilters, setShowAttachmentFilters] = useState(false);
+
   const nextChoiceSet = monster.pendingLevelChoices[0];
   const nextLevelExp = expToNextLevel(monster.level);
   const raidProfile = getRaidReadyStats(monster, equipmentInventory, equippedSlots);
@@ -131,6 +157,22 @@ export function MonsterView() {
     const filtered = filterEquipment(equipmentInventory, filters);
     return sortEquipment(filtered, sortKey, monster.level);
   }, [equipmentInventory, selectedTags, selectedRarities, selectedSlots, sortKey, monster.level]);
+
+  // Get all unique attachment effect categories and types from inventory
+  const allAttachmentCategories = useMemo(() => getAllAttachmentEffectCategories(attachmentInventory), [attachmentInventory]);
+  const allAttachmentTypes = useMemo(() => getAllAttachmentEffectTypes(attachmentInventory), [attachmentInventory]);
+
+  // Apply attachment filters and sort
+  const filteredAndSortedAttachments = useMemo(() => {
+    const filters: AttachmentFilterOptions = {
+      selectedRarities: selectedAttachmentRarities,
+      selectedSlots: selectedAttachmentSlots,
+      selectedCategories: selectedAttachmentCategories,
+      selectedTypes: selectedAttachmentTypes,
+    };
+    const filtered = filterAttachments(attachmentInventory, filters);
+    return sortAttachments(filtered, attachmentSortKey);
+  }, [attachmentInventory, selectedAttachmentRarities, selectedAttachmentSlots, selectedAttachmentCategories, selectedAttachmentTypes, attachmentSortKey]);
 
   // Create a map to check if items have synthesis partners
   const synthesisPartnerMap = useMemo(() => {
@@ -169,6 +211,40 @@ export function MonsterView() {
   };
 
   const hasActiveFilters = selectedTags.length > 0 || selectedRarities.length > 0 || selectedSlots.length > 0;
+
+  // Attachment filter functions
+  const toggleAttachmentRarity = (rarity: AttachmentRarity) => {
+    setSelectedAttachmentRarities((prev) =>
+      prev.includes(rarity) ? prev.filter((r) => r !== rarity) : [...prev, rarity],
+    );
+  };
+
+  const toggleAttachmentSlot = (slot: EquipmentSlot) => {
+    setSelectedAttachmentSlots((prev) =>
+      prev.includes(slot) ? prev.filter((s) => s !== slot) : [...prev, slot],
+    );
+  };
+
+  const toggleAttachmentCategory = (category: AttachmentEffectCategory) => {
+    setSelectedAttachmentCategories((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category],
+    );
+  };
+
+  const toggleAttachmentType = (type: AttachmentEffectType) => {
+    setSelectedAttachmentTypes((prev) =>
+      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
+    );
+  };
+
+  const clearAttachmentFilters = () => {
+    setSelectedAttachmentRarities([]);
+    setSelectedAttachmentSlots([]);
+    setSelectedAttachmentCategories([]);
+    setSelectedAttachmentTypes([]);
+  };
+
+  const hasActiveAttachmentFilters = selectedAttachmentRarities.length > 0 || selectedAttachmentSlots.length > 0 || selectedAttachmentCategories.length > 0 || selectedAttachmentTypes.length > 0;
 
   // Synthesis handlers
   const handleSynthesisModeToggle = () => {
@@ -454,7 +530,7 @@ export function MonsterView() {
                       {/* Active Skill Tags */}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {item.activeSkill.tags.map((tag) => (
-                          <TagPill key={`active-${tag}`} tag={tag} />
+                          <TagPill key={`active-${item.id}-${tag}`} tag={tag} />
                         ))}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
@@ -489,7 +565,7 @@ export function MonsterView() {
                       {/* Passive Skill Tags */}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {item.passiveSkill.tags.map((tag) => (
-                          <TagPill key={`passive-${tag}`} tag={tag} />
+                          <TagPill key={`passive-${item.id}-${tag}`} tag={tag} />
                         ))}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
@@ -504,6 +580,36 @@ export function MonsterView() {
                         Passive reroll ({equipmentRerollCost} SP)
                       </Button>
                     </div>
+                    {/* Random Statuses */}
+                    {item.randomStatuses.length > 0 && (
+                      <div className="mt-4 rounded-[18px] bg-stone-950/5 p-4">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="h-4 w-4 text-[var(--accent-amber)]" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Random Statuses</p>
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {item.randomStatuses.map((status, index) => (
+                            <div key={status.id} className="flex items-center justify-between gap-2">
+                              <p className="text-sm text-[var(--ink-strong)]">{status.description}</p>
+                              <Badge 
+                                tone={
+                                  status.type === "special" ? "ember" :
+                                  status.type === "conditional" ? "sky" :
+                                  status.type === "statPctBoost" ? "moss" :
+                                  "neutral"
+                                }
+                                className="text-xs"
+                              >
+                                {status.type === "special" ? "特殊" :
+                                 status.type === "conditional" ? "条件" :
+                                 status.type === "statPctBoost" ? "%" :
+                                 "固定"}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <div className="mt-4 rounded-[20px] border border-dashed border-[var(--line-strong)] px-4 py-8 text-sm text-[var(--ink-soft)]">
@@ -560,15 +666,34 @@ export function MonsterView() {
         {showAttachmentInventory && (
           <div className="mt-4 rounded-[20px] border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-4">
             <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm font-semibold text-[var(--ink-strong)]">アタッチメントインベントリ</span>
-              {attachmentSynthBase && (
-                <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-[var(--ink-strong)]">アタッチメントインベントリ</span>
+                {attachmentSynthBase && (
                   <Badge tone="ember">ベース: {attachmentSynthBase.name}</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setShowAttachmentFilters(!showAttachmentFilters)}>
+                  <Filter className="mr-2 h-4 w-4" />
+                  フィルター {hasActiveAttachmentFilters && `(${selectedAttachmentRarities.length + selectedAttachmentSlots.length + selectedAttachmentCategories.length + selectedAttachmentTypes.length})`}
+                </Button>
+                <select
+                  value={attachmentSortKey}
+                  onChange={(e) => setAttachmentSortKey(e.target.value as AttachmentSortKey)}
+                  className="rounded-lg border border-[var(--line-soft)] bg-white/70 px-3 py-1.5 text-sm text-[var(--ink-strong)]"
+                >
+                  {ATTACHMENT_SORT_OPTIONS.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {attachmentSynthBase && (
                   <Button variant="ghost" size="sm" onClick={() => setAttachmentSynthBase(null)}>
                     解除
                   </Button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {isAttachmentSynthMode && !attachmentSynthBase && (
@@ -582,8 +707,111 @@ export function MonsterView() {
               </p>
             )}
 
+            {/* Attachment Filter Panel */}
+            {showAttachmentFilters && (
+              <div className="mb-4 rounded-[18px] border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-[var(--ink-strong)]">アタッチメントフィルター設定</span>
+                  {hasActiveAttachmentFilters && (
+                    <Button variant="ghost" size="sm" onClick={clearAttachmentFilters}>
+                      <X className="mr-1 h-4 w-4" />
+                      クリア
+                    </Button>
+                  )}
+                </div>
+
+                {/* Slot Filter */}
+                <div className="mb-3">
+                  <span className="mb-2 block text-xs font-medium text-[var(--ink-soft)]">スロット</span>
+                  <div className="flex flex-wrap gap-2">
+                    {EQUIPMENT_SLOTS.map((slot) => (
+                      <TagPill
+                        key={slot}
+                        tag={getSlotLabel(slot)}
+                        selected={selectedAttachmentSlots.includes(slot)}
+                        onClick={() => toggleAttachmentSlot(slot)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Rarity Filter */}
+                <div className="mb-3">
+                  <span className="mb-2 block text-xs font-medium text-[var(--ink-soft)]">レア度</span>
+                  <div className="flex flex-wrap gap-2">
+                    {RARITIES.map((rarity) => {
+                      const color = getTagColor(rarity);
+                      return (
+                        <button
+                          key={rarity}
+                          onClick={() => toggleAttachmentRarity(rarity)}
+                          className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+                            selectedAttachmentRarities.includes(rarity) ? "ring-1 ring-offset-1" : ""
+                          }`}
+                          style={{
+                            backgroundColor: color.bg,
+                            color: color.text,
+                            borderColor: color.bg.replace(/[\d.]+\)/, "0.24)"),
+                            ["--tw-ring-color" as string]: selectedAttachmentRarities.includes(rarity) ? color.text : undefined,
+                          }}
+                        >
+                          {rarity}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Effect Category Filter */}
+                {allAttachmentCategories.length > 0 && (
+                  <div className="mb-3">
+                    <span className="mb-2 block text-xs font-medium text-[var(--ink-soft)]">
+                      効果カテゴリ（{allAttachmentCategories.length}種類）
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {allAttachmentCategories.map((category) => (
+                        <TagPill
+                          key={category}
+                          tag={getAttachmentEffectCategoryLabel(category)}
+                          selected={selectedAttachmentCategories.includes(category)}
+                          onClick={() => toggleAttachmentCategory(category)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Effect Type Filter */}
+                {allAttachmentTypes.length > 0 && (
+                  <div>
+                    <span className="mb-2 block text-xs font-medium text-[var(--ink-soft)]">
+                      効果タイプ（{allAttachmentTypes.length}種類）
+                    </span>
+                    <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                      {allAttachmentTypes.map((type) => (
+                        <TagPill
+                          key={type}
+                          tag={getAttachmentEffectTypeLabel(type)}
+                          selected={selectedAttachmentTypes.includes(type)}
+                          onClick={() => toggleAttachmentType(type)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Results count */}
+            <div className="mb-3 flex items-center justify-between text-sm text-[var(--ink-soft)]">
+              <span>
+                {filteredAndSortedAttachments.length} / {attachmentInventory.length} 件表示
+              </span>
+              {hasActiveAttachmentFilters && <span className="text-[var(--accent-ember)]">フィルター適用中</span>}
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {attachmentInventory.map((attachment) => {
+              {filteredAndSortedAttachments.map((attachment) => {
                 const isEquipped = equippedAttachments[attachment.slot].includes(attachment.id);
                 const isBase = attachmentSynthBase?.id === attachment.id;
                 const canBeMaterial = attachmentSynthBase &&
@@ -616,9 +844,14 @@ export function MonsterView() {
               })}
             </div>
 
-            {attachmentInventory.length === 0 && (
+            {filteredAndSortedAttachments.length === 0 && (
               <div className="rounded-[20px] border border-dashed border-[var(--line-strong)] px-4 py-8 text-center text-[var(--ink-soft)]">
-                <p className="text-sm">アタッチメントがありません。タスクを完了してドロップを狙いましょう。</p>
+                <p className="text-sm">
+                  {attachmentInventory.length === 0 
+                    ? "アタッチメントがありません。タスクを完了してドロップを狙いましょう。"
+                    : "条件に合うアタッチメントがありません。"
+                  }
+                </p>
               </div>
             )}
           </div>
@@ -839,7 +1072,7 @@ export function MonsterView() {
                         {/* Active Skill Tags */}
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {activeTags.map((tag) => (
-                            <TagPill key={`active-${tag}`} tag={tag} />
+                            <TagPill key={`active-${item.id}-${tag}`} tag={tag} />
                           ))}
                         </div>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
@@ -862,11 +1095,41 @@ export function MonsterView() {
                         {/* Passive Skill Tags */}
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {passiveTags.map((tag) => (
-                            <TagPill key={`passive-${tag}`} tag={tag} />
+                            <TagPill key={`passive-${item.id}-${tag}`} tag={tag} />
                           ))}
                         </div>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
                       </div>
+                      {/* Random Statuses */}
+                      {item.randomStatuses.length > 0 && (
+                        <div className="mt-4 rounded-[18px] bg-stone-950/5 p-4">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="h-4 w-4 text-[var(--accent-amber)]" />
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Random Statuses</p>
+                          </div>
+                          <div className="mt-3 space-y-2">
+                            {item.randomStatuses.map((status) => (
+                              <div key={status.id} className="flex items-center justify-between gap-2">
+                                <p className="text-sm text-[var(--ink-strong)]">{status.description}</p>
+                                <Badge 
+                                  tone={
+                                    status.type === "special" ? "ember" :
+                                    status.type === "conditional" ? "sky" :
+                                    status.type === "statPctBoost" ? "moss" :
+                                    "neutral"
+                                  }
+                                  className="text-xs"
+                                >
+                                  {status.type === "special" ? "特殊" :
+                                   status.type === "conditional" ? "条件" :
+                                   status.type === "statPctBoost" ? "%" :
+                                   "固定"}
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 

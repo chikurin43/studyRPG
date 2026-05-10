@@ -1,4 +1,4 @@
-import { ShieldAlert, Swords, WandSparkles } from "lucide-react";
+import { ShieldAlert, Sparkles, Swords, WandSparkles } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Meter } from "@/components/ui/Meter";
@@ -235,10 +235,40 @@ export function RaidView() {
                     {/* Active Skill Tags */}
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {item.activeSkill.tags.map((tag) => (
-                        <TagPill key={`active-${tag}`} tag={tag} />
+                        <TagPill key={`active-${item.id}-${tag}`} tag={tag} />
                       ))}
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
+                    {/* Random Statuses */}
+                    {item.randomStatuses.length > 0 && (
+                      <div className="mt-3 rounded-[16px] bg-stone-950/3 p-3">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="h-3 w-3 text-[var(--accent-amber)]" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Random Statuses</p>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          {item.randomStatuses.map((status) => (
+                            <div key={status.id} className="flex items-center justify-between gap-2">
+                              <p className="text-xs text-[var(--ink-strong)]">{status.description}</p>
+                              <Badge 
+                                tone={
+                                  status.type === "special" ? "ember" :
+                                  status.type === "conditional" ? "sky" :
+                                  status.type === "statPctBoost" ? "moss" :
+                                  "neutral"
+                                }
+                                className="text-xs"
+                              >
+                                {status.type === "special" ? "特殊" :
+                                 status.type === "conditional" ? "条件" :
+                                 status.type === "statPctBoost" ? "%" :
+                                 "固定"}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {equippedSkills.map((item) => (
@@ -251,10 +281,40 @@ export function RaidView() {
                     {/* Passive Skill Tags */}
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {item.passiveSkill.tags.map((tag) => (
-                        <TagPill key={`passive-${tag}`} tag={tag} />
+                        <TagPill key={`passive-${item.id}-${tag}`} tag={tag} />
                       ))}
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>
+                    {/* Random Statuses */}
+                    {item.randomStatuses.length > 0 && (
+                      <div className="mt-3 rounded-[16px] bg-stone-950/3 p-3">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="h-3 w-3 text-[var(--accent-amber)]" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Random Statuses</p>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          {item.randomStatuses.map((status) => (
+                            <div key={status.id} className="flex items-center justify-between gap-2">
+                              <p className="text-xs text-[var(--ink-strong)]">{status.description}</p>
+                              <Badge 
+                                tone={
+                                  status.type === "special" ? "ember" :
+                                  status.type === "conditional" ? "sky" :
+                                  status.type === "statPctBoost" ? "moss" :
+                                  "neutral"
+                                }
+                                className="text-xs"
+                              >
+                                {status.type === "special" ? "特殊" :
+                                 status.type === "conditional" ? "条件" :
+                                 status.type === "statPctBoost" ? "%" :
+                                 "固定"}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -437,7 +497,7 @@ export function RaidView() {
                       {/* Active Skill Tags */}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {item.activeSkill.tags.map((tag) => (
-                          <TagPill key={`active-${tag}`} tag={tag} />
+                          <TagPill key={`active-${item.id}-${tag}`} tag={tag} />
                         ))}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.activeSkill.description}</p>
@@ -453,7 +513,7 @@ export function RaidView() {
                       {/* Passive Skill Tags */}
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {item.passiveSkill.tags.map((tag) => (
-                          <TagPill key={`passive-${tag}`} tag={tag} />
+                          <TagPill key={`passive-${item.id}-${tag}`} tag={tag} />
                         ))}
                       </div>
                       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{item.passiveSkill.description}</p>

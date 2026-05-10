@@ -49,7 +49,7 @@ export function AttachmentCard({
               {getAttachmentRarityLabel(attachment.rarity)}
             </span>
           </div>
-          <p className="text-sm font-medium text-stone-200 truncate">{attachment.name}</p>
+          <p className="text-sm font-medium text-black truncate">{attachment.name}</p>
         </div>
         <div className="flex items-center gap-1">
           {onEquip && !isEquipped && (
@@ -68,7 +68,13 @@ export function AttachmentCard({
       <div className="mt-2 space-y-1">
         {attachment.effects.map((effect) => (
           <div key={effect.id} className="text-xs text-stone-300">
-            • {effect.description}
+            <div className="flex items-center gap-1">
+              <span>•</span>
+              {effect.condition && (
+                <span className="text-gray-700">[{effect.condition.description}]</span>
+              )}
+              <span className="text-black">{effect.description}</span>
+            </div>
           </div>
         ))}
       </div>
@@ -105,7 +111,7 @@ export function AttachmentSlotSection({
     <div className="rounded-[20px] border border-white/10 bg-white/5 p-3">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-stone-200">{getSlotLabel(slot)}</span>
+          <span className="text-sm font-medium text-black">{getSlotLabel(slot)}</span>
           <span className="text-xs text-stone-400">({equippedIds.length}/3)</span>
         </div>
         <Button

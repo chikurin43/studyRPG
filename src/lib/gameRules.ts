@@ -1,5 +1,10 @@
 import type {
   ActiveTimer,
+  Attachment,
+  AttachmentCombatState,
+  AttachmentEffectCategory,
+  AttachmentEffectType,
+  AttachmentRarity,
   CombatGuardState,
   CombatProfile,
   CombatStatusState,
@@ -26,6 +31,28 @@ import type {
   Task,
   TimerBonusSnapshot,
 } from "@/types/game";
+import {
+  ALL_EFFECT_GENERATORS,
+  EFFECT_GENERATORS_BY_CATEGORY,
+  getEffectCategoryChanceByRarity,
+} from "./attachmentEffects";
+import {
+  ALL_CONDITION_GENERATORS,
+  CONDITION_GENERATORS_BY_CATEGORY,
+  getConditionChanceByRarity,
+  getConditionMultiplier,
+} from "./attachmentConditions";
+import {
+  calculateAttachmentCombatState,
+  applyAttachmentToCombatant,
+  applyAttachmentToDamage,
+  applyAttachmentToMpCost,
+  applyAttachmentToIncomingDamage,
+  applyAttachmentToProbability,
+  applyAttachmentToSkillPower,
+  applyAttachmentToHeal,
+  type RandomFn as AttachmentRandomFn,
+} from "./raidCombat";
 
 export type RandomFn = () => number;
 
@@ -60,6 +87,14 @@ export type CombatantState = {
   criticalDamage: number;
   thresholdPassives: EquipmentPassiveSkill[];
   conditionPassives: EquipmentPassiveSkill[];
+  delayedAttack: {
+    turnsRemaining: number;
+    damage: number;
+    element: Element;
+    statusEffect: EquipmentActiveSkill["statusEffect"];
+    criticalRateBonus: number;
+  } | null;
+  attachmentCombatState: AttachmentCombatState | null;
 };
 
 type SkillBlueprint = {
@@ -169,6 +204,7 @@ const MAX_PERK_LEVEL = 3;
 const LEVEL_CHOICE_REROLL_COST = 10;
 const EQUIPMENT_SKILL_REROLL_COST = 12;
 export const MAX_BATTLE_TURNS = 12;
+export const RAID_BOSS_ENERGY_COST = 50;
 
 const EMPTY_MODIFIERS: ModifierBucket = {
   raidDamagePct: 0,
@@ -2090,6 +2126,8 @@ function createMonsterBattleState(profile: CombatProfile, thresholdPassives: Equ
     criticalDamage: profile.criticalDamage,
     thresholdPassives,
     conditionPassives,
+    delayedAttack: null,
+    attachmentCombatState: null,
   };
 }
 
@@ -2140,6 +2178,8 @@ function createBossBattleState(boss: RaidBoss): CombatantState {
     criticalDamage: 150,
     thresholdPassives,
     conditionPassives: [],
+    delayedAttack: null,
+    attachmentCombatState: null,
   };
 }
 
@@ -2329,6 +2369,37 @@ function chooseBossAction(boss: CombatantState, bossSkills: EquipmentActiveSkill
   };
 }
 
+function parseStatusFromDescription(statusText: string): EquipmentActiveSkill["statusEffect"] {
+  // Map Japanese status names to status types
+  const statusMap: Record<string, StatusEffectType> = {
+    "出血": "bleed",
+    "炎上": "burn",
+    "感電": "shock",
+    "凍傷": "frostbite",
+    "スタン": "stun",
+    "スロウ": "slow",
+    "防御ダウン": "defenseDown",
+    "暗闇": "darkness",
+    "封印": "seal",
+  };
+
+  // Extract duration and potency from the status text
+  const durationMatch = statusText.match(/(\d+)ターン/);
+  const potencyMatch = statusText.match(/(\d+)%/);
+
+  for (const [japaneseName, statusType] of Object.entries(statusMap)) {
+    if (statusText.includes(japaneseName)) {
+      return {
+        type: statusType,
+        durationTurns: durationMatch ? parseInt(durationMatch[1], 10) : 2,
+        potencyPct: potencyMatch ? parseInt(potencyMatch[1], 10) : 10,
+      };
+    }
+  }
+
+  return null;
+}
+
 function executeAction(
   attacker: CombatantState,
   defender: CombatantState,
@@ -2336,9 +2407,17 @@ function executeAction(
   rng: RandomFn,
   log: RaidBattleLogEntry[],
   turn: number,
+  attachmentState: import("@/types/game").AttachmentCombatState | null = null,
 ) {
+  // MPコストにアタッチメント効果を適用
+  let actualMpCost = action.mpCost;
+  if (action.kind === "skill" && attachmentState) {
+    const skillTags: string[] = []; // タグ情報が必要だが、現在は空配列
+    actualMpCost = applyAttachmentToMpCost(action.mpCost, action.element, skillTags, attachmentState);
+  }
+
   if (action.kind === "skill") {
-    attacker.mp = Math.max(0, attacker.mp - action.mpCost);
+    attacker.mp = Math.max(0, attacker.mp - actualMpCost);
   }
 
   // Handle reflection skills (リフレクト) - must be before guardEffect check
@@ -2366,6 +2445,62 @@ function executeAction(
       text: `${attacker.name} は ${action.name} を使用。${reflectPct}%のダメージを反射し、防御力が${defBuff}%上昇した（${action.durationTurns}ターン）。`,
     });
     return 0;
+  }
+
+  // Handle delayed attack skills (遅発弾)
+  if (action.name.includes("遅発弾")) {
+    // Extract the delayed attack parameters from the action description
+    const description = action.description || "";
+    const delayMatch = description.match(/(\d+)ターン後、自動で.*属性(\d+)%の追加攻撃が発動する/);
+    const critBonusMatch = description.match(/クリティカル率が(\d+)%上昇する/);
+    const statusMatch = description.match(/必ず(.+?)、/);
+    
+    if (delayMatch && action.durationTurns) {
+      const delay = parseInt(delayMatch[1], 10);
+      const delayedDamage = parseInt(delayMatch[2], 10);
+      const critBonus = critBonusMatch ? parseInt(critBonusMatch[1], 10) : 0;
+      
+      // Set up the delayed attack
+      attacker.delayedAttack = {
+        turnsRemaining: delay,
+        damage: delayedDamage,
+        element: action.element,
+        statusEffect: statusMatch ? parseStatusFromDescription(statusMatch[1]) : null,
+        criticalRateBonus: critBonus,
+      };
+      
+      // Deal the initial damage (action.powerPct contains the initial damage)
+      const { mainDamage, extraDamage, isCritical } = calculateDamage(
+        attacker,
+        defender,
+        action.element,
+        action.powerPct ?? 100,
+        action.piercePct,
+        action.extraDamagePct,
+        action.threshold,
+        action.pierceBonusElement,
+        action.multiplier,
+        action.durationTurns,
+        undefined,
+        log,
+        turn,
+      );
+      const totalDamage = mainDamage + extraDamage;
+      defender.hp = Math.max(0, defender.hp - totalDamage);
+      
+      const triangle = getElementTriangleBonus(action.element, defender.element);
+      const triangleText =
+        triangle > 1 ? " 有利属性!" : triangle < 1 ? " 不利属性..." : "";
+      const criticalText = isCritical ? " クリティカル!" : "";
+
+      log.push({
+        turn,
+        actor: attacker.actor,
+        text: `${attacker.name} の ${action.name}。${defender.name} に ${mainDamage} ダメージ。${delay}ターン後に追加攻撃が発動する。${triangleText}${criticalText}`.trim(),
+      });
+      
+      return totalDamage;
+    }
   }
 
   if (action.guardEffect) {
@@ -2409,11 +2544,17 @@ function executeAction(
     }
   }
 
+  // スキル威力にアタッチメント効果を適用
+  let skillPower = action.powerPct ?? 100;
+  if (attachmentState) {
+    skillPower = applyAttachmentToSkillPower(skillPower, action.element, attachmentState);
+  }
+
   const { mainDamage, extraDamage, isCritical } = calculateDamage(
     attacker,
     defender,
     action.element,
-    action.powerPct ?? 100,
+    skillPower,
     action.piercePct,
     action.extraDamagePct,
     action.threshold,
@@ -2424,7 +2565,14 @@ function executeAction(
     log,
     turn,
   );
-  const totalDamage = mainDamage + extraDamage;
+
+  // ダメージにアタッチメント効果を適用
+  let totalDamage = mainDamage + extraDamage;
+  const defenderHpPercent = (defender.hp / defender.maxHp) * 100;
+  if (attachmentState) {
+    totalDamage = applyAttachmentToDamage(totalDamage, attacker, defender, attachmentState, defenderHpPercent, isCritical);
+  }
+
   defender.hp = Math.max(0, defender.hp - totalDamage);
   const triangle = getElementTriangleBonus(action.element, defender.element);
   const triangleText =
@@ -2434,7 +2582,7 @@ function executeAction(
   log.push({
     turn,
     actor: attacker.actor,
-    text: `${attacker.name} の ${action.name}。${defender.name} に ${mainDamage} ダメージ。${triangleText}${criticalText}`.trim(),
+    text: `${attacker.name} の ${action.name}。${defender.name} に ${totalDamage} ダメージ。${triangleText}${criticalText}`.trim(),
   });
 
   // Handle passive skills that trigger when taking damage (被ダメ時)
@@ -2473,7 +2621,15 @@ function executeAction(
     }
   }
 
-  if (extraDamage > 0) {
+  // 追加ダメージログはアタッチメント適用後のダメージが基本ダメージと異なる場合のみ表示
+  const baseTotalDamage = mainDamage + extraDamage;
+  if (totalDamage !== baseTotalDamage) {
+    log.push({
+      turn,
+      actor: "system",
+      text: `アタッチメント効果でダメージが ${baseTotalDamage} → ${totalDamage} に変化。`,
+    });
+  } else if (extraDamage > 0) {
     log.push({
       turn,
       actor: "system",
@@ -2524,6 +2680,78 @@ function executeAction(
   }
 
   return totalDamage;
+}
+
+function executeDelayedAttack(
+  attacker: CombatantState,
+  defender: CombatantState,
+  rng: RandomFn,
+  log: RaidBattleLogEntry[],
+  turn: number,
+): boolean {
+  if (!attacker.delayedAttack || attacker.delayedAttack.turnsRemaining > 0) {
+    return false;
+  }
+
+  const delayedAttack = attacker.delayedAttack;
+  
+  // Calculate damage with critical rate bonus
+  const critChance = attacker.criticalRate + delayedAttack.criticalRateBonus;
+  const isCritical = rng() * 100 < critChance;
+  
+  const { mainDamage } = calculateDamage(
+    attacker,
+    defender,
+    delayedAttack.element,
+    delayedAttack.damage,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    log,
+    turn,
+  );
+
+  const finalDamage = isCritical ? Math.round(mainDamage * (attacker.criticalDamage / 100)) : mainDamage;
+  defender.hp = Math.max(0, defender.hp - finalDamage);
+
+  log.push({
+    turn,
+    actor: attacker.actor,
+    text: `${attacker.name} の遅発弾が発動！${defender.name} に ${finalDamage} ダメージ。${isCritical ? " クリティカル！" : ""}`,
+  });
+
+  // Apply status effect if present
+  if (delayedAttack.statusEffect && defender.hp > 0) {
+    const applied = applyStatus(defender, delayedAttack.statusEffect, rng);
+    log.push({
+      turn,
+      actor: "system",
+      text: applied
+        ? `${defender.name} に ${STATUS_LABELS[delayedAttack.statusEffect.type]} ${delayedAttack.statusEffect.durationTurns}ターン。`
+        : `${defender.name} は ${STATUS_LABELS[delayedAttack.statusEffect.type]} を防いだ。`,
+    });
+  }
+
+  // Clear the delayed attack
+  attacker.delayedAttack = null;
+  return true;
+}
+
+function updateDelayedAttacks(actor: CombatantState, log: RaidBattleLogEntry[], turn: number) {
+  if (actor.delayedAttack && actor.delayedAttack.turnsRemaining > 0) {
+    actor.delayedAttack.turnsRemaining--;
+    if (actor.delayedAttack.turnsRemaining === 0) {
+      log.push({
+        turn,
+        actor: "system",
+        text: `${actor.name} の遅発弾が次のターンに発動する！`,
+      });
+    }
+  }
 }
 
 function finishTurn(
@@ -2692,7 +2920,7 @@ export function createInitialRaidBoss(): RaidBoss {
     defense: 40,
     speed: 50,
     element: getBossElementForStage(1),
-    energyCost: 50,
+    energyCost: RAID_BOSS_ENERGY_COST,
     lastAttemptDate: null,
     activeSkills,
     passiveSkills,
@@ -2994,6 +3222,7 @@ export function generateEquipment(
   const activeSkill = generateEquipmentActiveSkill(rarity, rng);
   const passiveSkill = generateEquipmentPassiveSkill(rarity, rng);
   const statBonuses = rollStatBonuses(slot, rarity, stage, rng);
+  const randomStatuses = generateEquipmentRandomStatuses(rarity, slot, rng);
 
   return {
     id: createId("equipment"),
@@ -3004,6 +3233,7 @@ export function generateEquipment(
     statBonuses,
     activeSkill,
     passiveSkill,
+    randomStatuses,
   };
 }
 
@@ -3024,6 +3254,16 @@ export function rerollEquipmentPassiveSkill(
   return {
     ...equipment,
     passiveSkill: generateEquipmentPassiveSkill(equipment.rarity, rng),
+  };
+}
+
+export function rerollEquipmentRandomStatuses(
+  equipment: Equipment,
+  rng: RandomFn = Math.random,
+): Equipment {
+  return {
+    ...equipment,
+    randomStatuses: generateEquipmentRandomStatuses(equipment.rarity, equipment.slot, rng),
   };
 }
 
@@ -3147,7 +3387,7 @@ export function createNextRaidBoss(previousBoss: RaidBoss, lastAttemptDate: stri
     defense: Math.round(previousBoss.defense * 1.013 + 20),
     speed: Math.round(previousBoss.speed * 1.01 + 10),
     element: nextElement,
-    energyCost: previousBoss.energyCost,
+    energyCost: RAID_BOSS_ENERGY_COST,
     lastAttemptDate,
     activeSkills,
     passiveSkills,
@@ -3161,6 +3401,8 @@ export function simulateRaidBattle(
   equippedSlots: EquippedSlots,
   rng: RandomFn = Math.random,
   date = new Date(),
+  attachmentInventory: Attachment[] = [],
+  equippedAttachments: { weapon: string[]; armor: string[]; relic: string[] } = { weapon: [], armor: [], relic: [] },
 ): SimulatedRaidBattle {
   const today = toLocalDateKey(date);
   const monsterProfile = getMonsterRaidProfile(monster, inventory, equippedSlots);
@@ -3171,19 +3413,96 @@ export function simulateRaidBattle(
   let turn = 1;
   const bossStartingHp = boss.currentHp;
 
-  while (turn <= MAX_BATTLE_TURNS && monsterState.hp > 0 && bossState.hp > 0) {
-    const monsterActsFirst = getAdjustedSpeed(monsterState) >= getAdjustedSpeed(bossState);
+  // 装備中のアタッチメントを取得
+  const equippedAttachmentIds = [
+    ...equippedAttachments.weapon,
+    ...equippedAttachments.armor,
+    ...equippedAttachments.relic,
+  ];
+  const equippedAttachmentsData = equippedAttachmentIds
+    .map((id) => attachmentInventory.find((a) => a.id === id))
+    .filter((a): a is Attachment => a !== undefined);
+
+  // 初期アタッチメント効果を計算・適用
+  let currentAttachmentState = calculateAttachmentCombatState(
+    equippedAttachmentsData,
+    {
+      monsterHpPercent: 100,
+      monsterMpPercent: 100,
+      enemyHpPercent: 100,
+      currentTurn: 1,
+      isBeforeEnemy: monsterState.speed >= bossState.speed,
+      attackCountThisTurn: 0,
+      consecutiveSameSkillCount: 0,
+      consecutiveNormalAttackCount: 0,
+      consecutiveMpConsumeCount: 0,
+      lastSkillElement: undefined,
+      consecutiveSameElementCount: 0,
+      tookDamageLastEnemyTurn: false,
+      enemyHasStatus: false,
+      selfHasStatus: false,
+    }
+  );
+  let workingMonsterState = applyAttachmentToCombatant(monsterState, currentAttachmentState);
+  workingMonsterState.attachmentCombatState = currentAttachmentState;
+
+  while (turn <= MAX_BATTLE_TURNS && workingMonsterState.hp > 0 && bossState.hp > 0) {
+    // ターン開始時にアタッチメント効果を再計算
+    const monsterHpPercent = (workingMonsterState.hp / workingMonsterState.maxHp) * 100;
+    const monsterMpPercent = (workingMonsterState.mp / workingMonsterState.maxMp) * 100;
+    const bossHpPercent = (bossState.hp / bossState.maxHp) * 100;
+    const monsterActsFirst = getAdjustedSpeed(workingMonsterState) >= getAdjustedSpeed(bossState);
+
+    currentAttachmentState = calculateAttachmentCombatState(
+      equippedAttachmentsData,
+      {
+        monsterHpPercent,
+        monsterMpPercent,
+        enemyHpPercent: bossHpPercent,
+        currentTurn: turn,
+        isBeforeEnemy: monsterActsFirst,
+        attackCountThisTurn: 0,
+        consecutiveSameSkillCount: 0,
+        consecutiveNormalAttackCount: 0,
+        consecutiveMpConsumeCount: 0,
+        lastSkillElement: undefined,
+        consecutiveSameElementCount: 0,
+        tookDamageLastEnemyTurn: false,
+        enemyHasStatus: bossState.statuses.length > 0,
+        selfHasStatus: workingMonsterState.statuses.length > 0,
+      }
+    );
+
+    // ベースステータスから再計算
+    const baseMonsterState = createMonsterBattleState(monsterProfile, monsterProfile.thresholdPassives, monsterProfile.conditionPassives);
+    baseMonsterState.hp = workingMonsterState.hp;
+    baseMonsterState.mp = workingMonsterState.mp;
+    baseMonsterState.statuses = workingMonsterState.statuses;
+    baseMonsterState.guard = workingMonsterState.guard;
+    baseMonsterState.attackBuffPct = workingMonsterState.attackBuffPct;
+    baseMonsterState.attackBuffTurns = workingMonsterState.attackBuffTurns;
+    baseMonsterState.defenseBuffPct = workingMonsterState.defenseBuffPct;
+    baseMonsterState.defenseBuffTurns = workingMonsterState.defenseBuffTurns;
+    baseMonsterState.speedBuffPct = workingMonsterState.speedBuffPct;
+    baseMonsterState.speedBuffTurns = workingMonsterState.speedBuffTurns;
+    baseMonsterState.reflectPct = workingMonsterState.reflectPct;
+    baseMonsterState.reflectElement = workingMonsterState.reflectElement;
+    baseMonsterState.reflectTurns = workingMonsterState.reflectTurns;
+
+    workingMonsterState = applyAttachmentToCombatant(baseMonsterState, currentAttachmentState);
+    workingMonsterState.attachmentCombatState = currentAttachmentState;
+
     const turnOrder = monsterActsFirst
       ? [
-          { current: monsterState, target: bossState },
-          { current: bossState, target: monsterState },
+          { current: workingMonsterState, target: bossState, isMonster: true as const },
+          { current: bossState, target: workingMonsterState, isMonster: false as const },
         ]
       : [
-          { current: bossState, target: monsterState },
-          { current: monsterState, target: bossState },
+          { current: bossState, target: workingMonsterState, isMonster: false as const },
+          { current: workingMonsterState, target: bossState, isMonster: true as const },
         ];
 
-    for (const { current, target } of turnOrder) {
+    for (const { current, target, isMonster } of turnOrder) {
       if (current.hp <= 0 || target.hp <= 0) {
         continue;
       }
@@ -3193,7 +3512,7 @@ export function simulateRaidBattle(
           ? chooseMonsterAction(current, target, equippedItems)
           : chooseBossAction(current, boss.activeSkills, rng);
 
-      executeAction(current, target, action, rng, log, turn);
+      executeAction(current, target, action, rng, log, turn, isMonster ? currentAttachmentState : null);
       finishTurn(current, log, turn);
 
       if (target.hp <= 0 || current.hp <= 0) {
@@ -3201,6 +3520,7 @@ export function simulateRaidBattle(
       }
     }
 
+    workingMonsterState.attachmentCombatState = currentAttachmentState;
     turn += 1;
   }
 
@@ -3241,6 +3561,8 @@ export function initializeBattleState(
   boss: RaidBoss,
   inventory: Equipment[],
   equippedSlots: EquippedSlots,
+  attachmentInventory: Attachment[] = [],
+  equippedAttachments: { weapon: string[]; armor: string[]; relic: string[] } = { weapon: [], armor: [], relic: [] },
 ): {
   monsterState: CombatantState;
   bossState: CombatantState;
@@ -3251,7 +3573,42 @@ export function initializeBattleState(
   const bossState = createBossBattleState(boss);
   const battleLog: RaidBattleLogEntry[] = [];
 
-  return { monsterState, bossState, battleLog };
+  // 装備中のアタッチメントを取得
+  const equippedAttachmentIds = [
+    ...equippedAttachments.weapon,
+    ...equippedAttachments.armor,
+    ...equippedAttachments.relic,
+  ];
+  const equippedAttachmentsData = equippedAttachmentIds
+    .map((id) => attachmentInventory.find((a) => a.id === id))
+    .filter((a): a is Attachment => a !== undefined);
+
+  // 初期状態のアタッチメント効果を計算（戦闘開始時のコンテキスト）
+  const initialAttachmentState = calculateAttachmentCombatState(
+    equippedAttachmentsData,
+    {
+      monsterHpPercent: 100,
+      monsterMpPercent: 100,
+      enemyHpPercent: 100,
+      currentTurn: 1,
+      isBeforeEnemy: monsterState.speed >= bossState.speed,
+      attackCountThisTurn: 0,
+      consecutiveSameSkillCount: 0,
+      consecutiveNormalAttackCount: 0,
+      consecutiveMpConsumeCount: 0,
+      lastSkillElement: undefined,
+      consecutiveSameElementCount: 0,
+      tookDamageLastEnemyTurn: false,
+      enemyHasStatus: false,
+      selfHasStatus: false,
+    }
+  );
+
+  // モンスター状態にアタッチメント効果を適用
+  const modifiedMonsterState = applyAttachmentToCombatant(monsterState, initialAttachmentState);
+  modifiedMonsterState.attachmentCombatState = initialAttachmentState;
+
+  return { monsterState: modifiedMonsterState, bossState, battleLog };
 }
 
 export function getAvailableActions(
@@ -3310,31 +3667,86 @@ export function executeBattleTurn(
   equippedItems: Equipment[],
   rng: RandomFn,
   turn: number,
+  attachmentInventory: Attachment[] = [],
+  equippedAttachments: { weapon: string[]; armor: string[]; relic: string[] } = { weapon: [], armor: [], relic: [] },
 ): {
   monsterState: CombatantState;
   bossState: CombatantState;
   battleLog: RaidBattleLogEntry[];
 } {
   const battleLog: RaidBattleLogEntry[] = [];
+
+  // 装備中のアタッチメントを取得
+  const equippedAttachmentIds = [
+    ...equippedAttachments.weapon,
+    ...equippedAttachments.armor,
+    ...equippedAttachments.relic,
+  ];
+  const equippedAttachmentsData = equippedAttachmentIds
+    .map((id) => attachmentInventory.find((a) => a.id === id))
+    .filter((a): a is Attachment => a !== undefined);
+
+  // Check for and execute delayed attacks at the start of the turn
+  const monsterDelayedAttack = executeDelayedAttack(monsterState, bossState, rng, battleLog, turn);
+  const bossDelayedAttack = executeDelayedAttack(bossState, monsterState, rng, battleLog, turn);
+
+  // Update delayed attack counters
+  updateDelayedAttacks(monsterState, battleLog, turn);
+  updateDelayedAttacks(bossState, battleLog, turn);
+
+  // If a delayed attack defeated the opponent, end the turn early
+  if (monsterState.hp <= 0 || bossState.hp <= 0) {
+    return { monsterState, bossState, battleLog };
+  }
+
+  // ターン開始時のアタッチメント効果を計算
+  const monsterHpPercent = (monsterState.hp / monsterState.maxHp) * 100;
+  const monsterMpPercent = (monsterState.mp / monsterState.maxMp) * 100;
+  const bossHpPercent = (bossState.hp / bossState.maxHp) * 100;
   const monsterActsFirst = getAdjustedSpeed(monsterState) >= getAdjustedSpeed(bossState);
+
+  const attachmentState = calculateAttachmentCombatState(
+    equippedAttachmentsData,
+    {
+      monsterHpPercent,
+      monsterMpPercent,
+      enemyHpPercent: bossHpPercent,
+      currentTurn: turn,
+      isBeforeEnemy: monsterActsFirst,
+      attackCountThisTurn: 0,
+      consecutiveSameSkillCount: 0,
+      consecutiveNormalAttackCount: 0,
+      consecutiveMpConsumeCount: 0,
+      lastSkillElement: undefined,
+      consecutiveSameElementCount: 0,
+      tookDamageLastEnemyTurn: false,
+      enemyHasStatus: bossState.statuses.length > 0,
+      selfHasStatus: monsterState.statuses.length > 0,
+    }
+  );
+
+  // モンスター状態を更新（アタッチメント効果を適用）
+  let workingMonsterState = applyAttachmentToCombatant(monsterState, attachmentState);
+  workingMonsterState.attachmentCombatState = attachmentState;
+
   const turnOrder = monsterActsFirst
     ? [
-        { current: monsterState, target: bossState, action: playerAction },
-        { current: bossState, target: monsterState, action: null },
+        { current: workingMonsterState, target: bossState, action: playerAction, isMonster: true as const },
+        { current: bossState, target: workingMonsterState, action: null, isMonster: false as const },
       ]
     : [
-        { current: bossState, target: monsterState, action: null },
-        { current: monsterState, target: bossState, action: playerAction },
+        { current: bossState, target: workingMonsterState, action: null, isMonster: false as const },
+        { current: workingMonsterState, target: bossState, action: playerAction, isMonster: true as const },
       ];
 
-  for (const { current, target, action } of turnOrder) {
+  for (const { current, target, action, isMonster } of turnOrder) {
     if (current.hp <= 0 || target.hp <= 0) {
       continue;
     }
 
     const actualAction = action ?? (current.actor === "boss" ? chooseBossAction(current, bossSkills, rng) : null);
     if (actualAction) {
-      executeAction(current, target, actualAction, rng, battleLog, turn);
+      executeAction(current, target, actualAction, rng, battleLog, turn, isMonster ? attachmentState : null);
       finishTurn(current, battleLog, turn);
     }
 
@@ -3343,7 +3755,10 @@ export function executeBattleTurn(
     }
   }
 
-  return { monsterState, bossState, battleLog };
+  // 最終的なモンスター状態を返す（アタッチメント効果を保持）
+  workingMonsterState.attachmentCombatState = attachmentState;
+
+  return { monsterState: workingMonsterState, bossState, battleLog };
 }
 
 export function isTimerComplete(targetEndsAt: string | null, nowMs: number) {
@@ -3665,6 +4080,170 @@ export function sortEquipment(
   return sorted;
 }
 
+// ════════════════════════════════════════════════════════════
+// ── アタッチメントフィルタ・ソート ───────────────────────────
+// ════════════════════════════════════════════════════════════
+
+export type AttachmentSortKey =
+  | "dropStageDesc"
+  | "rarityDesc"
+  | "rarityAsc"
+  | "effectCountDesc"
+  | "effectCountAsc"
+  | "nameAsc"
+  | "nameDesc";
+
+export interface AttachmentFilterOptions {
+  selectedRarities: AttachmentRarity[];
+  selectedSlots: EquipmentSlot[];
+  selectedCategories: AttachmentEffectCategory[];
+  selectedTypes: AttachmentEffectType[];
+}
+
+export function getAllAttachmentEffectCategories(attachmentList: Attachment[]): AttachmentEffectCategory[] {
+  const categorySet = new Set<AttachmentEffectCategory>();
+  for (const attachment of attachmentList) {
+    attachment.effects.forEach((effect) => categorySet.add(effect.category));
+  }
+  return Array.from(categorySet).sort();
+}
+
+export function getAllAttachmentEffectTypes(attachmentList: Attachment[]): AttachmentEffectType[] {
+  const typeSet = new Set<AttachmentEffectType>();
+  for (const attachment of attachmentList) {
+    attachment.effects.forEach((effect) => typeSet.add(effect.type));
+  }
+  return Array.from(typeSet).sort();
+}
+
+export function filterAttachments(
+  attachmentList: Attachment[],
+  filters: AttachmentFilterOptions,
+): Attachment[] {
+  return attachmentList.filter((attachment) => {
+    // スロットフィルター
+    if (filters.selectedSlots.length > 0 && !filters.selectedSlots.includes(attachment.slot)) {
+      return false;
+    }
+    // レア度フィルター
+    if (filters.selectedRarities.length > 0 && !filters.selectedRarities.includes(attachment.rarity)) {
+      return false;
+    }
+    // 効果カテゴリフィルター
+    if (filters.selectedCategories.length > 0) {
+      const hasAnyCategory = attachment.effects.some((effect) => 
+        filters.selectedCategories.includes(effect.category)
+      );
+      if (!hasAnyCategory) return false;
+    }
+    // 効果タイプフィルター
+    if (filters.selectedTypes.length > 0) {
+      const hasAnyType = attachment.effects.some((effect) => 
+        filters.selectedTypes.includes(effect.type)
+      );
+      if (!hasAnyType) return false;
+    }
+    return true;
+  });
+}
+
+export function sortAttachments(
+  attachmentList: Attachment[],
+  sortKey: AttachmentSortKey,
+): Attachment[] {
+  const sorted = [...attachmentList];
+  const rarityValue: Record<AttachmentRarity, number> = { C: 1, B: 2, A: 3, S: 4, SS: 5, SSS: 6 };
+
+  switch (sortKey) {
+    case "dropStageDesc":
+      sorted.sort((a, b) => b.dropStage - a.dropStage);
+      break;
+    case "rarityDesc":
+      sorted.sort((a, b) => rarityValue[b.rarity] - rarityValue[a.rarity]);
+      break;
+    case "rarityAsc":
+      sorted.sort((a, b) => rarityValue[a.rarity] - rarityValue[b.rarity]);
+      break;
+    case "effectCountDesc":
+      sorted.sort((a, b) => b.effects.length - a.effects.length);
+      break;
+    case "effectCountAsc":
+      sorted.sort((a, b) => a.effects.length - b.effects.length);
+      break;
+    case "nameAsc":
+      sorted.sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+      break;
+    case "nameDesc":
+      sorted.sort((a, b) => b.name.localeCompare(a.name, 'ja'));
+      break;
+  }
+  return sorted;
+}
+
+// アタッチメント効果カテゴリの日本語ラベル
+export function getAttachmentEffectCategoryLabel(category: AttachmentEffectCategory): string {
+  const categoryLabels: Record<AttachmentEffectCategory, string> = {
+    statBoost: "ステータス増減",
+    skillParam: "スキルパラメータ",
+    probability: "確率操作",
+    calculation: "計算式介入",
+    ruleOverride: "ルール書き換え",
+  };
+  return categoryLabels[category] || category;
+}
+
+// アタッチメント効果タイプの日本語ラベル
+export function getAttachmentEffectTypeLabel(type: AttachmentEffectType): string {
+  const typeLabels: Record<AttachmentEffectType, string> = {
+    // ステータス増減
+    statFlat: "固定値ステータス増加",
+    statPercent: "割合ステータス増加",
+    statTradeOff: "トレードオフ効果",
+    allStatsPercent: "全ステータス増加",
+    hpDownAllUp: "HP低下・全ステ上昇",
+    critDamageUp: "クリティカルダメージ増加",
+    // 旧システム互換
+    statBoost: "固定値ステータス増加",
+    statPctBoost: "割合ステータス増加",
+    conditional: "条件付き効果",
+    tradeOff: "トレードオフ効果",
+    // スキルパラメータ
+    skillPowerUp: "スキル威力増加",
+    skillElementUp: "属性スキル効果増加",
+    skillMpCostFlat: "MPコスト固定値削減",
+    skillMpCostPercent: "MPコスト割合削減",
+    skillTagMpCost: "タグスキルMPコスト削減",
+    // 確率操作
+    critRateUp: "クリティカル率増加",
+    allProbabilityUp: "全確率増加",
+    allProbabilityMult: "全確率倍増",
+    critRateCritDamageConvert: "クリ率→クリダメ変換",
+    evasionNextSureHit: "回避時次回必中",
+    highProbGuarantee: "高確率確定発動",
+    doubleRoll: "2回振り有利採用",
+    critGuaranteesProb: "クリ時確率効果確定",
+    // 計算式介入
+    statToAttack: "ステータスを攻撃力に加算",
+    critDamageStatBased: "クリダメージステータス基準",
+    healAddStat: "回復量ステータス加算",
+    ignoreDef: "防御力無視",
+    lowHpDamageUp: "低HPダメージ増加",
+    // ルール書き換え
+    doubleSkillUse: "同スキル2回使用",
+    deathAction: "戦闘不能時行動",
+    doubleAction: "2回行動",
+    damageDelay: "ダメージ遅延",
+    hp1Protection: "HP1保護",
+    healToDamage: "回復→ダメージ変換",
+    mpFirstDamage: "MP優先ダメージ",
+    mpShortageHp: "MP不足時HP消費",
+    ghostState: "幽霊状態行動",
+    buffConsumeDamage: "バフ消費ダメージ増加",
+    debuffAttackUp: "デバフ時攻撃力増加",
+  };
+  return typeLabels[type] || type;
+}
+
 // Synthesis system constants
 const SYNTHESIS_SP_COST_BASE = 100;
 
@@ -3738,6 +4317,9 @@ export function previewSynthesis(
     resultingPassiveSkill = upgradePassiveSkillRank(material.passiveSkill, resultRarity);
   }
 
+  // Calculate resulting random statuses - inherit best ones from both parents
+  const resultingRandomStatuses = calculateSynthesizedRandomStatuses(base, material, resultRarity);
+
   return {
     baseEquipment: base,
     materialEquipment: material,
@@ -3764,6 +4346,9 @@ export function executeSynthesis(
     return null;
   }
 
+  // Calculate resulting random statuses
+  const resultingRandomStatuses = calculateSynthesizedRandomStatuses(base, material, preview.resultRarity);
+
   // Create new equipment with synthesized properties
   const newEquipment: import("@/types/game").Equipment = {
     id: createId("equipment"),
@@ -3774,6 +4359,7 @@ export function executeSynthesis(
     statBonuses: preview.resultingStats,
     activeSkill: preview.resultingActiveSkill,
     passiveSkill: preview.resultingPassiveSkill,
+    randomStatuses: resultingRandomStatuses,
   };
 
   return { newEquipment, spCost: preview.spCost };
@@ -3813,6 +4399,63 @@ function upgradePassiveSkillRank(
   newRarity: import("@/types/game").EquipmentRarity
 ): import("@/types/game").EquipmentPassiveSkill {
   return upgradeSkillRank(skill, newRarity) as import("@/types/game").EquipmentPassiveSkill;
+}
+
+function calculateSynthesizedRandomStatuses(
+  base: Equipment,
+  material: Equipment,
+  resultRarity: EquipmentRarity,
+): import("@/types/game").EquipmentRandomStatus[] {
+  const allStatuses = [...base.randomStatuses, ...material.randomStatuses];
+  const targetCount = EQUIPMENT_RANDOM_STATUS_COUNTS[resultRarity];
+  const resultingStatuses: import("@/types/game").EquipmentRandomStatus[] = [];
+  const usedStatKeys = new Set<StatKey>();
+
+  // First, prioritize special and conditional effects
+  const specialStatuses = allStatuses.filter(s => s.type === "special");
+  const conditionalStatuses = allStatuses.filter(s => s.type === "conditional");
+  
+  // Add at most 1 special effect
+  if (specialStatuses.length > 0) {
+    resultingStatuses.push(pickOne(specialStatuses, Math.random));
+  }
+  
+  // Add at most 1 conditional effect
+  if (conditionalStatuses.length > 0 && resultingStatuses.length < targetCount) {
+    resultingStatuses.push(pickOne(conditionalStatuses, Math.random));
+  }
+
+  // Then add the best stat boosts (prioritize percentage boosts)
+  const statStatuses = allStatuses.filter(s => s.type === "statPctBoost" || s.type === "statBoost");
+  
+  // Sort by value (percentage boosts first, then by value)
+  statStatuses.sort((a, b) => {
+    if (a.type === "statPctBoost" && b.type !== "statPctBoost") return -1;
+    if (a.type !== "statPctBoost" && b.type === "statPctBoost") return 1;
+    const aValue = a.percentValue || a.flatValue || 0;
+    const bValue = b.percentValue || b.flatValue || 0;
+    return bValue - aValue;
+  });
+
+  // Add remaining stat boosts (avoiding duplicates)
+  for (const status of statStatuses) {
+    if (resultingStatuses.length >= targetCount) break;
+    if (status.stat && !usedStatKeys.has(status.stat)) {
+      resultingStatuses.push(status);
+      usedStatKeys.add(status.stat);
+    }
+  }
+
+  // If we still need more statuses, generate new ones
+  while (resultingStatuses.length < targetCount) {
+    const newStatus = generateEquipmentRandomStatus(resultRarity, base.slot, Math.random);
+    if (newStatus.stat && !usedStatKeys.has(newStatus.stat)) {
+      resultingStatuses.push(newStatus);
+      usedStatKeys.add(newStatus.stat);
+    }
+  }
+
+  return resultingStatuses;
 }
 
 function generateSynthesizedEquipmentName(
@@ -3867,18 +4510,147 @@ const RARITY_EFFECT_COUNTS: Record<import("@/types/game").AttachmentRarity, numb
   SSS: 3,
 };
 
+const EQUIPMENT_RANDOM_STATUS_COUNTS: Record<EquipmentRarity, number> = {
+  C: 0,
+  B: 1,
+  A: 1,
+  S: 2,
+  SS: 2,
+  SSS: 3,
+};
+
+// 新しいアタッチメント効果生成システム
 function generateAttachmentEffect(
   rarity: import("@/types/game").AttachmentRarity,
   slot: EquipmentSlot,
   rng: RandomFn,
 ): import("@/types/game").AttachmentEffect {
+  // カテゴリ選択確率をランクに基づいて計算
+  const categories: AttachmentEffectCategory[] = [
+    "statBoost",
+    "skillParam",
+    "probability",
+    "calculation",
+    "ruleOverride",
+  ];
+
+  // 各カテゴリの出現確率を計算
+  const categoryWeights = categories.map((cat) => ({
+    category: cat,
+    weight: getEffectCategoryChanceByRarity(rarity, cat),
+  }));
+
+  // 重み付きランダム選択
+  const totalWeight = categoryWeights.reduce((sum, cw) => sum + cw.weight, 0);
+  let roll = rng() * totalWeight;
+  let selectedCategory = categories[0];
+
+  for (const cw of categoryWeights) {
+    roll -= cw.weight;
+    if (roll <= 0) {
+      selectedCategory = cw.category;
+      break;
+    }
+  }
+
+  // 選択されたカテゴリからランダムにジェネレーターを選んで実行
+  const generators = EFFECT_GENERATORS_BY_CATEGORY[selectedCategory];
+  const generator = pickOne(generators, rng);
+  return generator(rarity, rng);
+}
+
+function generateConditionalEffect(
+  rarity: import("@/types/game").AttachmentRarity,
+  rng: RandomFn,
+): import("@/types/game").AttachmentEffect | null {
+  // 高ランクほど条件がつきやすい
+  const conditionChance: Record<import("@/types/game").AttachmentRarity, number> = {
+    C: 0,
+    B: 0.15,
+    A: 0.3,
+    S: 0.5,
+    SS: 0.7,
+    SSS: 0.85,
+  };
+
+  if (rng() > conditionChance[rarity]) return null;
+
+  // 条件カテゴリを選択
+  const conditionCategories: ("resource" | "status" | "action" | "turn")[] = [
+    "resource",
+    "status",
+    "action",
+    "turn",
+  ];
+
+  const categoryWeights = conditionCategories.map((cat) => ({
+    category: cat,
+    weight: getConditionChanceByRarity(rarity, cat),
+  }));
+
+  const totalWeight = categoryWeights.reduce((sum, cw) => sum + cw.weight, 0);
+  let roll = rng() * totalWeight;
+  let selectedCategory = conditionCategories[0];
+
+  for (const cw of categoryWeights) {
+    roll -= cw.weight;
+    if (roll <= 0) {
+      selectedCategory = cw.category;
+      break;
+    }
+  }
+
+  // 条件ジェネレーターを選択・実行
+  const generators = CONDITION_GENERATORS_BY_CATEGORY[selectedCategory];
+  const generator = pickOne(generators, rng);
+  const condition = generator(rarity, rng);
+
+  // 条件付き効果を生成（基本効果に条件を付加）
+  const baseEffect = generateAttachmentEffect(rarity, "weapon", rng);
+
+  // 条件による効果増加
+  const multiplier = getConditionMultiplier(1);
+  if (baseEffect.flatValue) {
+    baseEffect.flatValue = Math.round(baseEffect.flatValue * multiplier);
+  }
+  if (baseEffect.percentValue) {
+    baseEffect.percentValue = Math.round(baseEffect.percentValue * multiplier);
+  }
+  if (baseEffect.skillPowerBoost) {
+    baseEffect.skillPowerBoost = Math.round(baseEffect.skillPowerBoost * multiplier);
+  }
+  if (baseEffect.mpCostReduction) {
+    baseEffect.mpCostReduction = Math.round(baseEffect.mpCostReduction * multiplier);
+  }
+  if (baseEffect.probabilityValue && typeof baseEffect.probabilityValue === "number") {
+    baseEffect.probabilityValue = Math.round(baseEffect.probabilityValue * multiplier);
+  }
+  if (baseEffect.ruleValue) {
+    baseEffect.ruleValue = Math.round(baseEffect.ruleValue * multiplier);
+  }
+
+  // 条件を付加
+  baseEffect.condition = condition;
+
+  // 説明文に条件を追加
+  baseEffect.description = `${condition.description}、${baseEffect.description}`;
+
+  return baseEffect;
+}
+
+// Equipment Random Status Generation Functions
+function generateEquipmentRandomStatus(
+  rarity: EquipmentRarity,
+  slot: EquipmentSlot,
+  rng: RandomFn,
+): import("@/types/game").EquipmentRandomStatus {
   const stats: StatKey[] = ["hp", "mp", "attack", "defense", "speed"];
   const stat = pickOne(stats, rng);
   const templates = ATTACHMENT_EFFECT_TEMPLATES[stat];
   const template = pickOne(templates, rng);
 
-  // Roll for effect type (higher rarity = better chance for % boost)
-  const pctBoostChance: Record<import("@/types/game").AttachmentRarity, number> = {
+  // Higher rarity = better chance for percentage boost
+  const pctBoostChance: Record<EquipmentRarity, number> = {
     C: 0.1,
     B: 0.2,
     A: 0.35,
@@ -3890,11 +4662,11 @@ function generateAttachmentEffect(
   const isPercent = rng() < pctBoostChance[rarity];
 
   if (isPercent) {
-    const pctValues: Record<import("@/types/game").AttachmentRarity, { min: number; max: number }> = {
-      C: { min: 1, max: 3 },
-      B: { min: 2, max: 5 },
-      A: { min: 3, max: 7 },
-      S: { min: 5, max: 10 },
+    const pctValues: Record<EquipmentRarity, { min: number; max: number }> = {
+      C: { min: 1, max: 2 },
+      B: { min: 2, max: 4 },
+      A: { min: 3, max: 6 },
+      S: { min: 5, max: 8 },
       SS: { min: 7, max: 12 },
       SSS: { min: 10, max: 15 },
     };
@@ -3902,7 +4674,7 @@ function generateAttachmentEffect(
     const value = Math.floor(rng() * (range.max - range.min + 1)) + range.min;
 
     return {
-      id: createId("att-effect"),
+      id: createId("equip-status"),
       type: "statPctBoost",
       stat,
       percentValue: value,
@@ -3911,32 +4683,32 @@ function generateAttachmentEffect(
   } else {
     const flatValues: Record<EquipmentSlot, Record<StatKey, { min: number; max: number }>> = {
       weapon: {
-        hp: { min: 5, max: 15 },
-        mp: { min: 3, max: 10 },
-        attack: { min: 3, max: 8 },
-        defense: { min: 1, max: 4 },
-        speed: { min: 1, max: 3 },
+        hp: { min: 3, max: 8 },
+        mp: { min: 2, max: 6 },
+        attack: { min: 2, max: 5 },
+        defense: { min: 1, max: 3 },
+        speed: { min: 1, max: 2 },
       },
       armor: {
-        hp: { min: 10, max: 25 },
-        mp: { min: 5, max: 12 },
-        attack: { min: 1, max: 4 },
-        defense: { min: 3, max: 8 },
-        speed: { min: 1, max: 3 },
+        hp: { min: 6, max: 15 },
+        mp: { min: 2, max: 6 },
+        attack: { min: 1, max: 3 },
+        defense: { min: 2, max: 6 },
+        speed: { min: 0, max: 2 },
       },
       relic: {
-        hp: { min: 8, max: 20 },
-        mp: { min: 8, max: 20 },
-        attack: { min: 2, max: 6 },
-        defense: { min: 2, max: 6 },
-        speed: { min: 2, max: 5 },
+        hp: { min: 4, max: 10 },
+        mp: { min: 4, max: 10 },
+        attack: { min: 1, max: 4 },
+        defense: { min: 1, max: 4 },
+        speed: { min: 1, max: 4 },
       },
     };
     const range = flatValues[slot][stat];
     const value = Math.floor(rng() * (range.max - range.min + 1)) + range.min;
 
     return {
-      id: createId("att-effect"),
+      id: createId("equip-status"),
       type: "statBoost",
       stat,
       flatValue: value,
@@ -3945,36 +4717,38 @@ function generateAttachmentEffect(
   }
 }
 
-function generateConditionalEffect(
-  rarity: import("@/types/game").AttachmentRarity,
+function generateEquipmentConditionalStatus(
+  rarity: EquipmentRarity,
   rng: RandomFn,
-): import("@/types/game").AttachmentEffect | null {
+): import("@/types/game").EquipmentRandomStatus | null {
   // Only A rarity and above can have conditional effects
   if (rarity === "C" || rarity === "B") return null;
 
-  const chance = rarity === "A" ? 0.3 : rarity === "S" ? 0.5 : rarity === "SS" ? 0.7 : 0.85;
+  const chance = rarity === "A" ? 0.25 : rarity === "S" ? 0.4 : rarity === "SS" ? 0.6 : 0.8;
   if (rng() > chance) return null;
 
   const conditions = [
     { threshold: 50, stat: "hp", description: "HP50%以下で" },
     { threshold: 30, stat: "hp", description: "HP30%以下で" },
     { threshold: 80, stat: "hp", description: "HP80%以上で" },
+    { threshold: 25, stat: "mp", description: "MP25%以下で" },
+    { threshold: 75, stat: "mp", description: "MP75%以上で" },
   ];
   const condition = pickOne(conditions, rng);
   const stats: StatKey[] = ["attack", "defense", "speed"];
   const stat = pickOne(stats, rng);
 
-  const boostValues: Record<import("@/types/game").AttachmentRarity, number> = {
-    A: 10,
-    S: 15,
-    SS: 20,
+  const boostValues: Record<EquipmentRarity, number> = {
+    A: 8,
+    S: 12,
+    SS: 18,
     SSS: 25,
     C: 5,
-    B: 8,
+    B: 6,
   };
 
   return {
-    id: createId("att-effect"),
+    id: createId("equip-status"),
     type: "conditional",
     stat,
     percentValue: boostValues[rarity],
@@ -3982,6 +4756,72 @@ function generateConditionalEffect(
     threshold: condition.threshold,
     description: `${condition.description}${stat === "attack" ? "攻撃" : stat === "defense" ? "防御" : "速度"} +${boostValues[rarity]}%`,
   };
+}
+
+function generateEquipmentSpecialStatus(
+  rarity: EquipmentRarity,
+  rng: RandomFn,
+): import("@/types/game").EquipmentRandomStatus | null {
+  // Only S rarity and above can have special effects
+  if (rarity === "C" || rarity === "B" || rarity === "A") return null;
+
+  const chance = rarity === "S" ? 0.3 : rarity === "SS" ? 0.5 : 0.7;
+  if (rng() > chance) return null;
+
+  const specialEffects = [
+    {
+      description: "レイドダメージ +5%",
+      type: "special" as const,
+    },
+    {
+      description: "タスク報酬 +3%",
+      type: "special" as const,
+    },
+    {
+      description: "獲得EXP +4%",
+      type: "special" as const,
+    },
+    {
+      description: "クリティカル率 +2%",
+      type: "special" as const,
+    },
+  ];
+
+  const effect = pickOne(specialEffects, rng);
+
+  return {
+    id: createId("equip-status"),
+    type: effect.type,
+    description: effect.description,
+  };
+}
+
+function generateEquipmentRandomStatuses(
+  rarity: EquipmentRarity,
+  slot: EquipmentSlot,
+  rng: RandomFn,
+): import("@/types/game").EquipmentRandomStatus[] {
+  const statusCount = EQUIPMENT_RANDOM_STATUS_COUNTS[rarity];
+  const statuses: import("@/types/game").EquipmentRandomStatus[] = [];
+
+  // Generate base random statuses
+  for (let i = 0; i < statusCount; i++) {
+    statuses.push(generateEquipmentRandomStatus(rarity, slot, rng));
+  }
+
+  // Possibly add conditional status for high rarity
+  const conditionalStatus = generateEquipmentConditionalStatus(rarity, rng);
+  if (conditionalStatus) {
+    statuses.push(conditionalStatus);
+  }
+
+  // Possibly add special status for very high rarity
+  const specialStatus = generateEquipmentSpecialStatus(rarity, rng);
+  if (specialStatus) {
+    statuses.push(specialStatus);
+  }
+
+  return statuses;
 }
 
 export function generateAttachment(
@@ -4197,21 +5037,71 @@ export function calculateAttachmentBonuses(
 
   attachments.forEach((attachment) => {
     attachment.effects.forEach((effect) => {
-      if (!effect.stat) return;
-
-      if (effect.type === "statBoost" && effect.flatValue) {
-        flat[effect.stat] += effect.flatValue;
-      } else if (effect.type === "statPctBoost" && effect.percentValue) {
-        percent[effect.stat] += effect.percentValue;
-      } else if (effect.type === "conditional" && effect.percentValue && effect.threshold !== undefined) {
-        // Check if condition is met
-        const conditionMet = effect.condition?.includes("以下")
-          ? monsterHpPercent <= effect.threshold
-          : monsterHpPercent >= effect.threshold;
-
-        if (conditionMet) {
-          percent[effect.stat] += effect.percentValue;
+      // 条件チェック（あれば）
+      let conditionMet = true;
+      if (effect.condition) {
+        switch (effect.condition.type) {
+          case "hpBelow":
+            conditionMet = monsterHpPercent <= (effect.condition.threshold ?? 50);
+            break;
+          case "hpAbove":
+            conditionMet = monsterHpPercent >= (effect.condition.threshold ?? 80);
+            break;
+          // 他の条件は戦闘時に評価されるため、ここでは常に適用しないか簡易判定
+          default:
+            conditionMet = false; // 非HP条件は戦闘時に評価
         }
+      }
+
+      if (!conditionMet) return;
+
+      // 新しい型システム
+      switch (effect.type) {
+        case "statFlat":
+          if (effect.stat && effect.flatValue) {
+            flat[effect.stat] += effect.flatValue;
+          }
+          break;
+        case "statPercent":
+          if (effect.stat && effect.percentValue) {
+            percent[effect.stat] += effect.percentValue;
+          }
+          break;
+        case "statTradeOff":
+          if (effect.stat && effect.flatValue) {
+            flat[effect.stat] += effect.flatValue;
+          }
+          if (effect.statSecondary && effect.percentValue) {
+            flat[effect.statSecondary] -= effect.percentValue; // マイナス効果
+          }
+          break;
+        case "allStatsPercent":
+          if (effect.percentValue) {
+            percent.attack += effect.percentValue;
+            percent.defense += effect.percentValue;
+            percent.speed += effect.percentValue;
+          }
+          break;
+        case "hpDownAllUp":
+          if (effect.percentValue && effect.skillPowerBoost) {
+            percent.hp -= effect.percentValue;
+            percent.attack += effect.skillPowerBoost;
+            percent.defense += effect.skillPowerBoost;
+            percent.speed += effect.skillPowerBoost;
+          }
+          break;
+        // 旧システムとの互換性
+        case "statBoost":
+        case "statPctBoost":
+        case "conditional":
+        case "tradeOff":
+          if (effect.stat && effect.flatValue) {
+            flat[effect.stat] += effect.flatValue;
+          }
+          if (effect.stat && effect.percentValue) {
+            percent[effect.stat] += effect.percentValue;
+          }
+          break;
       }
     });
   });

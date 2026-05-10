@@ -658,8 +658,8 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 : currentTask,
             );
 
-            // Low chance to drop attachment based on task difficulty (10% + difficulty * 2%)
-            const attachmentDropChance = 0.10 + (task.difficulty * 0.02);
+            // Attachment drop chance based on task duration (durationMinutes/120, capped at 100%)
+            const attachmentDropChance = Math.min(task.durationMinutes / 120, 1.0);
             let droppedAttachment: Attachment | null = null;
             if (random() < attachmentDropChance) {
               // Determine stage based on monster level
@@ -852,6 +852,8 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               state.equippedSlots,
               random,
               actionTime,
+              state.attachmentInventory,
+              state.equippedAttachments,
             );
 
             let nextMonster = state.monster;
@@ -954,6 +956,8 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               state.raid.boss,
               state.equipmentInventory,
               state.equippedSlots,
+              state.attachmentInventory,
+              state.equippedAttachments,
             );
 
             return {
@@ -991,6 +995,8 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
               equippedItems,
               random,
               state.raid.currentTurn,
+              state.attachmentInventory,
+              state.equippedAttachments,
             );
 
             const battleEnded = monsterState.hp <= 0 || bossState.hp <= 0 || state.raid.currentTurn >= MAX_BATTLE_TURNS;

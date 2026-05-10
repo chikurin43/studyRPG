@@ -174,7 +174,8 @@ export function SynthesisModal({
                         dropStage: Math.max(base.dropStage, material.dropStage),
                         statBonuses: preview.resultingStats,
                         activeSkill: preview.resultingActiveSkill, 
-                        passiveSkill: preview.resultingPassiveSkill
+                        passiveSkill: preview.resultingPassiveSkill,
+                        randomStatuses: []
                       },
                       monsterLevel
                     )[statKey];
