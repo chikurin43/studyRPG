@@ -98,6 +98,7 @@ export function MonsterView() {
   const equippedSlots = useGameStore((state) => state.equippedSlots);
   const attachmentInventory = useGameStore((state) => state.attachmentInventory);
   const equippedAttachments = useGameStore((state) => state.equippedAttachments);
+  const reincarnationBonus = useGameStore((state) => state.reincarnationBonus);
   const claimLevelChoice = useGameStore((state) => state.claimLevelChoice);
   const rerollLevelChoices = useGameStore((state) => state.rerollLevelChoices);
   const equipItem = useGameStore((state) => state.equipItem);
@@ -357,9 +358,16 @@ export function MonsterView() {
             </div>
             <div className="mt-4 space-y-2">
               <Meter value={monster.exp} max={nextLevelExp} tone="moss" />
-              <p className="text-sm text-[var(--ink-soft)]">
-                次のレベルまで {formatNumber(Math.max(0, nextLevelExp - monster.exp))} EXP
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-[var(--ink-soft)]">
+                  次のレベルまで {formatNumber(Math.max(0, nextLevelExp - monster.exp))} EXP
+                </p>
+                {reincarnationBonus > 0 && (
+                  <div className="inline-flex items-center rounded-full border border-[rgba(205,167,95,0.24)] bg-[rgba(205,167,95,0.12)] px-2 py-1 text-xs font-medium text-[var(--accent-moss)]">
+                    +{reincarnationBonus}% 転生ボーナス
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -378,6 +386,7 @@ export function MonsterView() {
             </div>
           </div>
 
+          
           <div className="grid gap-4">
             <div className="rounded-[24px] border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-5">
               <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--ink-soft)]">Raid Profile</p>

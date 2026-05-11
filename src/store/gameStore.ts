@@ -3,6 +3,7 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 import { useStore } from "zustand";
 import {
   applyLevelChoice,
+  calculateReincarnationBonus,
   calculateTaskCompletionReward,
   canAttemptRaid,
   clamp,
@@ -116,6 +117,7 @@ type Actions = {
   unequipAttachment: (attachmentId: string, slot: EquipmentSlot) => void;
   previewAttachmentSynth: (baseId: string, materialId: string) => AttachmentSynthesisPreview | null;
   executeAttachmentSynth: (baseId: string, materialId: string) => void;
+  reincarnate: () => void;
 };
 
 export type GameStoreState = PersistedGameState & UIState & Actions;
@@ -142,6 +144,8 @@ function getPersistedSlice(state: GameStoreState): PersistedGameState {
     equippedSlots: state.equippedSlots,
     attachmentInventory: state.attachmentInventory,
     equippedAttachments: state.equippedAttachments,
+    reincarnationCount: state.reincarnationCount,
+    reincarnationBonus: state.reincarnationBonus,
   };
 }
 
@@ -641,7 +645,7 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
 
             const snapshot: TimerBonusSnapshot | null =
               state.timer.activeTaskId === taskId ? state.timer.bonusSnapshot : null;
-            const reward = calculateTaskCompletionReward(task, state.monster, snapshot);
+            const reward = calculateTaskCompletionReward(task, state.monster, snapshot, state.reincarnationBonus);
             const monsterResult = grantMonsterExperience(state.monster, reward.exp, random);
             const gainedMonster = monsterResult.monster;
             const monsterLevelUp = gainedMonster.level > state.monster.level;
@@ -1311,6 +1315,46 @@ export function createGameStore(dependencies: StoreDependencies = {}) {
                 sp: state.resources.sp - spCost,
               },
               lastActionMessage: `アタッチメント合成成功！ ${newAttachment.name} (${newAttachment.rarity}) を獲得しました。`,
+            };
+          }),
+
+        reincarnate: () =>
+          set((state: GameStoreState) => {
+            // Check if monster level is at least 5
+            if (state.monster.level < 5) {
+              return {
+                lastActionMessage: "転生するにはモンスターがレベル5以上必要です。",
+              };
+            }
+
+            // Calculate bonus from current level
+            const bonusFromCurrentLevel = calculateReincarnationBonus(state.monster.level);
+            const newReincarnationCount = state.reincarnationCount + 1;
+            const newReincarnationBonus = state.reincarnationBonus + bonusFromCurrentLevel;
+
+            // Create fresh game state but preserve task data and reincarnation data
+            const freshState = createInitialGameState();
+
+            return {
+              // Preserve task-related data
+              tasks: state.tasks,
+              folders: state.folders,
+              
+              // Reset game-related data
+              timer: freshState.timer,
+              monster: freshState.monster,
+              resources: freshState.resources,
+              raid: freshState.raid,
+              equipmentInventory: freshState.equipmentInventory,
+              equippedSlots: freshState.equippedSlots,
+              attachmentInventory: freshState.attachmentInventory,
+              equippedAttachments: freshState.equippedAttachments,
+              
+              // Update reincarnation data
+              reincarnationCount: newReincarnationCount,
+              reincarnationBonus: newReincarnationBonus,
+              
+              lastActionMessage: `転生完了！レベル${state.monster.level}で転生し、+${bonusFromCurrentLevel}%の経験値ボーナスを獲得しました。合計+${newReincarnationBonus}%のボーナスが適用されます。`,
             };
           }),
 

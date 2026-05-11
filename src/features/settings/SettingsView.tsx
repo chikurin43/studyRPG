@@ -13,20 +13,26 @@ export function SettingsView() {
   const tasks = useGameStore((s) => s.tasks);
   const folders = useGameStore((s) => s.folders);
   const timer = useGameStore((s) => s.timer);
-  const monster = useGameStore((s) => s.monster);
   const resources = useGameStore((s) => s.resources);
   const raid = useGameStore((s) => s.raid);
   const equipmentInventory = useGameStore((s) => s.equipmentInventory);
   const equippedSlots = useGameStore((s) => s.equippedSlots);
 
+  // Get reincarnation state
+  const reincarnationCount = useGameStore((s) => s.reincarnationCount);
+  const reincarnationBonus = useGameStore((s) => s.reincarnationBonus);
+  const monster = useGameStore((s) => s.monster);
+
   // Get store actions
   const resetGame = useGameStore((s) => s.resetGame);
+  const reincarnate = useGameStore((s) => s.reincarnate);
 
   const [password, setPassword] = useState("");
   const [importPassword, setImportPassword] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showReincarnationConfirm, setShowReincarnationConfirm] = useState(false);
 
   // Clear message after 5 seconds
   const showMessage = (type: "success" | "error", text: string) => {
@@ -53,6 +59,8 @@ export function SettingsView() {
         equippedSlots,
         attachmentInventory: [],
         equippedAttachments: { weapon: [], armor: [], relic: [] },
+        reincarnationCount,
+        reincarnationBonus,
       };
 
       const { blob, filename } = exportSaveData(state, password);
@@ -221,6 +229,45 @@ export function SettingsView() {
         </div>
       </Panel>
 
+      {/* Reincarnation Section */}
+      <Panel
+        title="転生"
+        description="モンスターの育成状況や装備、レイドボスの進捗などをリセットし、恒久的な経験値ボーナスを獲得します。タスクデータは保持されます。"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-3">
+              <p className="text-xs font-medium text-[var(--ink-soft)]">転生回数</p>
+              <p className="mt-1 text-lg font-semibold text-[var(--ink-strong)]">{reincarnationCount}</p>
+            </div>
+            <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--bg-panel-strong)] p-3">
+              <p className="text-xs font-medium text-[var(--ink-soft)]">現在の経験値ボーナス</p>
+              <p className="mt-1 text-lg font-semibold text-[var(--accent-moss)]">+{reincarnationBonus}%</p>
+            </div>
+          </div>
+          
+          <Button
+            onClick={() => setShowReincarnationConfirm(true)}
+            disabled={monster.level < 5}
+            variant="secondary"
+            className="w-full gap-2"
+          >
+            <RotateCcw size={18} />
+            転生する
+          </Button>
+          
+          {monster.level < 5 && (
+            <p className="text-xs text-[var(--ink-soft)]">
+              転生するにはモンスターがレベル5以上必要です。（現在: レベル{monster.level}）
+            </p>
+          )}
+          
+          <p className="text-xs text-[var(--ink-soft)]">
+            ⚠️ 転生するとモンスター、装備、レイド進捗などがリセットされますが、タスクデータと転生ボーナスは保持されます。
+          </p>
+        </div>
+      </Panel>
+
       {/* Reset Section */}
       <Panel
         title="ゲームデータをリセット"
@@ -281,6 +328,52 @@ export function SettingsView() {
               >
                 <RotateCcw size={16} />
                 リセットする
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reincarnation Confirmation Dialog */}
+      {showReincarnationConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="mx-4 max-w-md rounded-xl border border-[var(--line-soft)] bg-[var(--bg-panel)] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.3)]">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-[var(--ink-strong)]">転生の確認</h3>
+                <p className="mt-2 text-sm text-[var(--ink-soft)]">
+                  レベル{monster.level}で転生すると、+{(monster.level - 1) * 1}%の経験値ボーナスを獲得できます。
+                  モンスター、装備、レイド進捗などがリセットされますが、タスクデータと転生ボーナスは保持されます。
+                  本当に転生しますか？
+                </p>
+              </div>
+              <button
+                onClick={() => setShowReincarnationConfirm(false)}
+                className="rounded-lg p-1 text-[var(--ink-soft)] hover:bg-[var(--line-soft)]"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="flex gap-3">
+              <Button
+                onClick={() => setShowReincarnationConfirm(false)}
+                variant="ghost"
+                className="flex-1"
+              >
+                キャンセル
+              </Button>
+              <Button
+                onClick={() => {
+                  reincarnate();
+                  setShowReincarnationConfirm(false);
+                  showMessage("success", "転生が完了しました。");
+                }}
+                variant="secondary"
+                className="flex-1 gap-2"
+              >
+                <RotateCcw size={16} />
+                転生する
               </Button>
             </div>
           </div>

@@ -443,6 +443,8 @@ export interface PersistedGameState {
   equippedSlots: EquippedSlots;
   attachmentInventory: Attachment[];
   equippedAttachments: EquippedAttachments;
+  reincarnationCount: number;
+  reincarnationBonus: number;
 }
 
 export interface CompletionReward {

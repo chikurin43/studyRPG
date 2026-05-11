@@ -2974,6 +2974,8 @@ export function createInitialGameState(): PersistedGameState {
       armor: [],
       relic: [],
     },
+    reincarnationCount: 0,
+    reincarnationBonus: 0,
   };
 }
 
@@ -3028,6 +3030,8 @@ export function normalizePersistedGameState(
       ...initialState.equippedAttachments,
       ...(persistedState?.equippedAttachments ?? {}),
     },
+    reincarnationCount: persistedState?.reincarnationCount ?? initialState.reincarnationCount,
+    reincarnationBonus: persistedState?.reincarnationBonus ?? initialState.reincarnationBonus,
   };
 }
 
@@ -3056,15 +3060,20 @@ export function getTaskDurationMs(task: Task, monster: Monster, snapshot: TimerB
   return Math.round(task.durationMinutes * 60_000);
 }
 
+export function calculateReincarnationBonus(level: number): number {
+  return (level - 1) * 1; // 1% per level above 1
+}
+
 export function calculateTaskCompletionReward(
   task: Task,
   monster: Monster,
   snapshot: TimerBonusSnapshot | null,
+  reincarnationBonus: number = 0,
 ): CompletionReward {
   const passiveModifiers = getPassiveTaskModifiers(monster);
   const baseReward = task.durationMinutes * task.difficulty;
   const taskRewardPct = passiveModifiers.taskRewardPct + (snapshot?.taskRewardPct ?? 0);
-  const expGainPct = passiveModifiers.expGainPct + (snapshot?.expGainPct ?? 0);
+  const expGainPct = passiveModifiers.expGainPct + (snapshot?.expGainPct ?? 0) + reincarnationBonus;
   const energyGainPct = passiveModifiers.energyGainPct + (snapshot?.energyGainPct ?? 0);
   const scaledBase = Math.round(baseReward * (1 + taskRewardPct / 100));
   const exp = Math.round(scaledBase * (1 + expGainPct / 100));
